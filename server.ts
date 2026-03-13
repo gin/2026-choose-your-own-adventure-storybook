@@ -86,6 +86,7 @@ app.prepare().then(() => {
         model: 'gemini-2.5-flash-native-audio-preview-12-2025',
         config: {
           responseModalities: [Modality.AUDIO],
+          outputAudioTranscription: {},
           systemInstruction: {
             parts: [{ text: "You are a friendly interactive storybook narrator. You speak to a 3-5 year old child. Keep stories engaging, magical, and ask the child what happens next! Use a warm, expressive voice. Start by introducing yourself and asking the child what kind of adventure they want to go on today." }]
           }
@@ -96,13 +97,20 @@ app.prepare().then(() => {
           },
           onmessage: async (serverMsg: any) => {
             try {
-              // Forward all server content to browser
+              const keys = Object.keys(serverMsg);
+              console.log('Gemini msg keys:', keys.join(', '));
+              // Forward all server messages to browser so the client can handle
+              // serverContent (modelTurn, outputTranscription, inputTranscription, turnComplete)
               if (serverMsg.serverContent) {
                 wsClient.send(JSON.stringify({ type: 'content', data: serverMsg }));
               }
               // setupComplete indicates session is ready
               if (serverMsg.setupComplete) {
                 console.log('Gemini session setup complete');
+              }
+              // Forward tool calls if any
+              if (serverMsg.toolCall) {
+                wsClient.send(JSON.stringify({ type: 'toolCall', data: serverMsg }));
               }
             } catch (err) {
               console.error("Error processing server message:", err);

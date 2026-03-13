@@ -14,6 +14,7 @@ export default function StoryBook() {
   const [isConnected, setIsConnected] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [storyText, setStoryText] = useState("Waiting for the story to begin...");
+  const [spokenText, setSpokenText] = useState("");
   const [illustration, setIllustration] = useState<string | null>(null);
   const [debugOpen, setDebugOpen] = useState(false);
   const [debugLog, setDebugLog] = useState<string[]>([]);
@@ -24,11 +25,17 @@ export default function StoryBook() {
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const processorRef = useRef<AudioWorkletNode | null>(null);
   const nextStartTimeRef = useRef(0);
+  const spokenTextEndRef = useRef<HTMLDivElement | null>(null);
 
   function addDebug(msg: string) {
     const timestamp = new Date().toLocaleTimeString();
     setDebugLog((prev) => [`[${timestamp}] ${msg}`, ...prev].slice(0, 50));
   }
+
+  // Auto-scroll "What I'm Saying" to show newest text
+  useEffect(() => {
+    spokenTextEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [spokenText]);
 
   useEffect(() => {
     // Determine dynamic WebSocket URL based on host
@@ -55,7 +62,11 @@ export default function StoryBook() {
            setIllustration(msg.data.url);
            addDebug('Got illustration URL');
         } else if (msg.type === 'content') {
-           const serverContent = msg.data.serverContent;
+           const serverContent = msg.data?.serverContent;
+           // Log all keys present in serverContent for debugging
+           if (serverContent) {
+              addDebug(`serverContent keys: ${Object.keys(serverContent).join(', ')}`);
+           }
            if (serverContent && serverContent.modelTurn) {
               const parts = serverContent.modelTurn.parts;
               for (const part of parts) {
@@ -69,8 +80,19 @@ export default function StoryBook() {
                  }
               }
            }
+           // Handle output audio transcription (what the AI is saying aloud)
+           if (serverContent?.outputTranscription?.text) {
+              setSpokenText((prev) => prev + serverContent.outputTranscription.text);
+              addDebug(`Spoken: "${serverContent.outputTranscription.text.substring(0, 40)}"`);
+           }
+           // Handle interrupted turns
+           if (serverContent?.interrupted) {
+              addDebug('Model turn was interrupted by user');
+              setSpokenText((prev) => prev + '\n[interrupted]\n');
+           }
            if (serverContent?.turnComplete) {
               addDebug('Turn complete');
+              setSpokenText((prev) => prev + '\n\n');
            }
         }
       } catch (err) {
@@ -216,10 +238,22 @@ export default function StoryBook() {
 
         {/* Text and Interaction Area */}
         <div className="flex flex-col gap-6">
+           {/* What I'm Saying box */}
            <div className="card-playful flex-1 flex flex-col">
-              <h2 className="text-2xl font-bold text-brand-pink mb-4">The Story So Far...</h2>
+              <h2 className="text-2xl font-bold text-brand-blue mb-4">💬 What I'm Saying</h2>
               <div className="flex-1 overflow-y-auto">
                  <p className="text-xl font-medium text-gray-800 leading-relaxed whitespace-pre-wrap">
+                    {spokenText || "Listening..."}
+                 </p>
+                 <div ref={spokenTextEndRef} />
+              </div>
+           </div>
+
+           {/* What I'm Thinking box */}
+           <div className="card-playful flex flex-col">
+              <h2 className="text-2xl font-bold text-brand-pink mb-4">🧠 What I'm Thinking</h2>
+              <div className="overflow-y-auto">
+                 <p className="text-sm font-medium text-gray-500 leading-relaxed whitespace-pre-wrap">
                     {storyText}
                  </p>
               </div>
