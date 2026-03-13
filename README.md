@@ -15,20 +15,22 @@
 
 ## Testing Locally
 To run and test the storybook locally before deploying:
-
-1. Copy .env.example to .env.local and add your API keys:
-    `GEMINI_API_KEY` (Required for AI generation)
-    `GCS_BUCKET_NAME` (Optional: used for Image Storage. If omitted, uses local data URIs)
-    `GOOGLE_APPLICATION_CREDENTIALS` (Optional: path to service account key. If omitted, uses a local JSON file to mock Firestore and GCS)
-2. Start the dev server: npm run dev
-3. Navigate to http://localhost:3000
-4. Pick a character (e.g., Friendly Capybara), take a webcam picture!
-5. Allow the microphone on the Storybook page. Start talking back to the Capybara to change the flow of the story.
+1. Get a Gemini API key from Google AI Studio or Vertex AI  
+    - https://aistudio.google.com/api-keys
+    - https://console.cloud.google.com/vertex-ai/studio/settings/api-keys
+2. Copy .env.example to .env.local and add your API keys:
+    - `GEMINI_API_KEY` (Required for AI generation)
+    - `GCS_BUCKET_NAME` (Optional: used for Image Storage. If omitted, uses local data URIs)
+    - `GOOGLE_APPLICATION_CREDENTIALS` (Optional: path to service account key. If omitted, uses a local JSON file to mock Firestore and GCS)
+3. Start the dev server: npm run dev
+4. Navigate to http://localhost:3000
+5. Pick a character (e.g., Friendly Capybara), take a webcam picture!
+6. Allow the microphone on the Storybook page. Start talking back to the Capybara to change the flow of the story.
 
 ## Deploy
-1. Copy terraform/terraform.tfvars.example to terraform/dev.tfvars and update the values:
-    TF_VAR_project_id="your-google-cloud-project-id"
-    TF_VAR_region="us-central1"
+1. Copy `terraform/terraform.tfvars.example` to `terraform/dev.tfvars` and update the values:
+    - `TF_VAR_project_id="your-google-cloud-project-id"
+    - `TF_VAR_region="us-central1"
 2. Setup infrastructure:
 ```bash
 cd terraform
@@ -36,7 +38,7 @@ terraform init
 terraform apply -var-file="dev.tfvars"
 ```
 
-## Tear down when done
+## Tear down when done testing in GCP dev environment 
 1. Run `terraform destroy -var-file="dev.tfvars"` to delete the Cloud Run service and stop incurring idle costs.
 
 ## ⚠️ Important Cost Precautions

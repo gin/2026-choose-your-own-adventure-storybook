@@ -31,7 +31,7 @@ yarn-error.log*
 .pnpm-debug.log*
 
 # env files (can opt-in for committing if needed)
-# .env*
+.env*
 
 # vercel
 .vercel
@@ -46,6 +46,9 @@ next-env.d.ts
 
 # terraform
 terraform.tfvars
+free-tier.tfvars
+test.tfvars
+prod.tfvars
 
 # local mock db
 .local-db.json
