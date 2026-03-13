@@ -26,6 +26,7 @@ export default function StoryBook() {
   const processorRef = useRef<AudioWorkletNode | null>(null);
   const nextStartTimeRef = useRef(0);
   const spokenTextEndRef = useRef<HTMLDivElement | null>(null);
+  const fullSpokenTextRef = useRef("");
 
   function addDebug(msg: string) {
     const timestamp = new Date().toLocaleTimeString();
@@ -67,31 +68,68 @@ export default function StoryBook() {
            if (serverContent) {
               addDebug(`serverContent keys: ${Object.keys(serverContent).join(', ')}`);
            }
-           if (serverContent && serverContent.modelTurn) {
-              const parts = serverContent.modelTurn.parts;
-              for (const part of parts) {
-                 if (part.text) {
-                    setStoryText((prev) => prev + " " + part.text);
-                    addDebug(`Text: "${part.text.substring(0, 40)}..."`);
-                 }
-                 if (part.inlineData && part.inlineData.data) {
-                    addDebug(`Audio chunk received (${part.inlineData.data.length} chars)`);
-                    playPcmData(part.inlineData.data);
-                 }
-              }
-           }
-           // Handle output audio transcription (what the AI is saying aloud)
-           if (serverContent?.outputTranscription?.text) {
-              setSpokenText((prev) => prev + serverContent.outputTranscription.text);
-              addDebug(`Spoken: "${serverContent.outputTranscription.text.substring(0, 40)}"`);
-           }
+            if (serverContent && serverContent.modelTurn) {
+               const parts = serverContent.modelTurn.parts;
+               for (const part of parts) {
+                  if (part.text) {
+                     // Clear placeholder on first text
+                     setStoryText((prev) => {
+                        let newText = part.text
+                           .replace(/(?:PHOTO|IMAGE|IMAGE_PROMPT|SCENE):\s*([^.\n!?,]*)/gi, '')
+                           .replace(/\*\*.*?\*\*/g, '') // Remove markdown bold headers
+                           .replace(/#{1,6}\s.*/g, '')  // Remove markdown headers
+                           .trim();
+                        
+                        if (!newText) return prev;
+                        if (prev === "Waiting for the story to begin...") return newText;
+                        return prev + " " + newText;
+                     });
+                     addDebug(`Text: "${part.text.substring(0, 40)}..."`);
+                  }
+                  if (part.inlineData && part.inlineData.data) {
+                     addDebug(`Audio chunk received (${part.inlineData.data.length} chars)`);
+                     playPcmData(part.inlineData.data);
+                  }
+               }
+            }
+
+             // Handle input audio transcription (what the USER is saying)
+             if (serverContent?.inputTranscription?.text) {
+                const chunk = serverContent.inputTranscription.text;
+                fullSpokenTextRef.current += chunk;
+                setSpokenText(fullSpokenTextRef.current);
+                addDebug(`User spoken chunk: "${chunk.substring(0, 20)}"`);
+             }
+
+             // Handle output audio transcription (if enabled)
+             if (serverContent?.outputTranscription?.text) {
+                const chunk = serverContent.outputTranscription.text;
+                // fullSpokenTextRef.current += chunk; // This line is now for user input only
+                addDebug(`Spoken chunk: "${chunk.substring(0, 20)}"`);
+             }
+
+             // Update the display text based on the full buffer (filtering out triggers)
+             if (serverContent?.modelTurn || serverContent?.outputTranscription) {
+                // 1. Strip complete tags (all formats)
+                let display = fullSpokenTextRef.current
+                   .replace(/(?:PHOTO|IMAGE|IMAGE_PROMPT|SCENE):\s*([^.\n!?,]*)/gi, '')
+                   .replace(/\[\[IMAGE:.*?\]\]/gi, '');
+
+                // 2. Hide partial tags at the end
+                display = display.replace(/(?:PHOTO|IMAGE|IMAGE_PROMPT|SCENE):\s*.*$/i, '');
+                display = display.replace(/\[\[[^\]]*$/, '');
+                
+                setSpokenText(display);
+             }
            // Handle interrupted turns
            if (serverContent?.interrupted) {
               addDebug('Model turn was interrupted by user');
+              fullSpokenTextRef.current += '\n[interrupted]\n';
               setSpokenText((prev) => prev + '\n[interrupted]\n');
            }
            if (serverContent?.turnComplete) {
               addDebug('Turn complete');
+              fullSpokenTextRef.current = ""; // Reset buffer for next turn
               setSpokenText((prev) => prev + '\n\n');
            }
         }
@@ -238,23 +276,23 @@ export default function StoryBook() {
 
         {/* Text and Interaction Area */}
         <div className="flex flex-col gap-6">
-           {/* What I'm Saying box */}
+           {/* What I'm Thinking box (THE STORY) */}
            <div className="card-playful flex-1 flex flex-col">
-              <h2 className="text-2xl font-bold text-brand-blue mb-4">💬 What I'm Saying</h2>
+              <h2 className="text-2xl font-bold text-brand-pink mb-4">🧠 The Story So Far...</h2>
               <div className="flex-1 overflow-y-auto">
                  <p className="text-xl font-medium text-gray-800 leading-relaxed whitespace-pre-wrap">
-                    {spokenText || "Listening..."}
+                    {storyText}
                  </p>
-                 <div ref={spokenTextEndRef} />
+                 <div ref={spokenTextEndRef} className="h-4" />
               </div>
            </div>
 
-           {/* What I'm Thinking box */}
-           <div className="card-playful flex flex-col">
-              <h2 className="text-2xl font-bold text-brand-pink mb-4">🧠 What I'm Thinking</h2>
+           {/* What I'm Saying box (USER INPUT) */}
+           <div className="card-playful flex flex-col max-h-48">
+              <h2 className="text-xl font-bold text-brand-blue mb-2">💬 My Choices</h2>
               <div className="overflow-y-auto">
-                 <p className="text-sm font-medium text-gray-500 leading-relaxed whitespace-pre-wrap">
-                    {storyText}
+                 <p className="text-md font-medium text-gray-500 leading-relaxed italic">
+                    {spokenText || "Ready to listen to you..."}
                  </p>
               </div>
            </div>

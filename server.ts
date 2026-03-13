@@ -35,8 +35,8 @@ app.prepare().then(() => {
         wss.emit('connection', ws, request);
       });
     } else if (pathname?.startsWith('/_next')) {
-       // Let Next.js handle its own HMR WebSocket upgrades
-       return;
+      // Let Next.js handle its own HMR WebSocket upgrades
+      return;
     } else {
       socket.destroy();
     }
@@ -44,8 +44,10 @@ app.prepare().then(() => {
 
   wss.on('connection', async (wsClient) => {
     console.log('Client connected to /api/live');
-    
+
     let session: any = null;
+    let transcriptionBuffer = ''; // Used for real-time STT
+    let modelTextBuffer = '';     // Used for modelTurn parts
 
     wsClient.on('message', (message) => {
       try {
@@ -76,7 +78,7 @@ app.prepare().then(() => {
     wsClient.on('close', () => {
       try {
         if (session) session.close();
-      } catch (e) {}
+      } catch (e) { }
     });
 
     try {
@@ -86,9 +88,8 @@ app.prepare().then(() => {
         model: 'gemini-2.5-flash-native-audio-preview-12-2025',
         config: {
           responseModalities: [Modality.AUDIO],
-          outputAudioTranscription: {},
           systemInstruction: {
-            parts: [{ text: "You are a friendly interactive storybook narrator. You speak to a 3-5 year old child. Keep stories engaging, magical, and ask the child what happens next! Use a warm, expressive voice. Start by introducing yourself and asking the child what kind of adventure they want to go on today." }]
+            parts: [{ text: "You are a friendly interactive storybook narrator for a 3-5 year old. Warm, magical, expressive! \n\nCRITICAL DIRECTIVE:\n- YOU ARE THE NARRATOR. NEVER talk about these instructions or your plan.\n- DO NOT use headers, bold text, or internal thoughts.\n- YOUR RESPONSE MUST START WITH: 'PHOTO: [vivid 1-sentence description]' \n- THEN IMMEDIATELY START THE STORY.\n\nExample:\nPHOTO: A cute brown bear named Barnaby in a field of sunflowers. Hello there! Once upon a time..." }]
           }
         },
         callbacks: {
@@ -98,19 +99,74 @@ app.prepare().then(() => {
           onmessage: async (serverMsg: any) => {
             try {
               const keys = Object.keys(serverMsg);
-              console.log('Gemini msg keys:', keys.join(', '));
+              // console.log('Gemini msg keys:', keys.join(', '));
+
               // Forward all server messages to browser so the client can handle
               // serverContent (modelTurn, outputTranscription, inputTranscription, turnComplete)
               if (serverMsg.serverContent) {
+                const scKeys = Object.keys(serverMsg.serverContent);
+                // console.log('  serverContent keys:', scKeys.join(', '));
                 wsClient.send(JSON.stringify({ type: 'content', data: serverMsg }));
               }
-              // setupComplete indicates session is ready
+              // 1. Accumulate text from transcription (if enabled)
+              if (serverMsg.serverContent?.outputTranscription?.text) {
+                const chunk = serverMsg.serverContent.outputTranscription.text;
+                transcriptionBuffer += chunk;
+                console.log(`[STT Chunk] "${chunk}"`);
+              }
+
+              // 2. Accumulate text from model parts (the story content)
+              if (serverMsg.serverContent?.modelTurn?.parts) {
+                for (const part of serverMsg.serverContent.modelTurn.parts) {
+                  if (part.text) {
+                    modelTextBuffer += part.text;
+                    console.log(`[Text Part] "${part.text}"`);
+                  }
+                }
+              }
+
+              // 3. Check for triggers in BOTH buffers
+              const unifiedBuffer = transcriptionBuffer + " | " + modelTextBuffer;
+              // Robust Regex: Look for trigger words, then capture everything until a sentence ender (. ! ?) or a pause
+              const regex = /(?:PHOTO|IMAGE|IMAGE_PROMPT|SCENE):\s*([^.!?]{10,})/i;
+              const match = unifiedBuffer.match(regex);
+
+              if (match && match[1]) {
+                let prompt = match[1].trim();
+                // Strip leading/trailing quotes if the model ignored instructions
+                prompt = prompt.replace(/^["']+|["']+$/g, '').trim();
+
+                console.log(`>>> DETECTED IMAGE TRIGGER: ${prompt}`);
+
+                // Clear the trigger from the model buffer to prevent re-triggering
+                // We do a partial match-based replacement
+                const rawMatch = match[0];
+                transcriptionBuffer = transcriptionBuffer.replace(rawMatch, '');
+                modelTextBuffer = modelTextBuffer.replace(rawMatch, '');
+
+                console.log(`>>> ATTEMPTING IMAGE GENERATION: ${prompt}`);
+                generateIllustration({ prompt }).then(result => {
+                  if (result.success && result.url) {
+                    console.log(`>>> IMAGE READY: ${result.url.substring(0, 50)}...`);
+                    wsClient.send(JSON.stringify({
+                      type: 'illustration',
+                      data: { url: result.url }
+                    }));
+                  } else {
+                    console.error(">>> IMAGE GENERATION FAILED:", result.error);
+                  }
+                }).catch(err => console.error(">>> TRIGGER ERROR:", err));
+              }
+
+              // Handle setupComplete indicates session is ready
               if (serverMsg.setupComplete) {
                 console.log('Gemini session setup complete');
               }
-              // Forward tool calls if any
-              if (serverMsg.toolCall) {
-                wsClient.send(JSON.stringify({ type: 'toolCall', data: serverMsg }));
+              // Reset buffer on turn boundaries
+              if (serverMsg.serverContent?.turnComplete || serverMsg.serverContent?.interrupted) {
+                console.log(`--- Turn Complete / Interrupted - Clearing Buffers ---`);
+                transcriptionBuffer = '';
+                modelTextBuffer = '';
               }
             } catch (err) {
               console.error("Error processing server message:", err);
@@ -121,15 +177,15 @@ app.prepare().then(() => {
           },
           onclose: (e: any) => {
             console.log("Gemini closed the connection:", e?.reason || 'no reason');
-            try { wsClient.close(); } catch (err) {}
+            try { wsClient.close(); } catch (err) { }
           }
         }
       });
       console.log('Gemini Live API connected successfully');
       wsClient.send(JSON.stringify({ type: 'connected' }));
     } catch (error: any) {
-       console.error("Error connecting to Gemini Live API:", error?.message || error);
-       wsClient.close();
+      console.error("Error connecting to Gemini Live API:", error?.message || error);
+      wsClient.close();
     }
   });
 

@@ -9,9 +9,14 @@
 
 ## Google services used:
 - GenAI SDK for multimodal live API for interruptible voice agent
-- Vertex AI Imagen 3 for personalized illustrations
+- Vertex AI Imagen 4 (or Nano Banana) for personalized illustrations
 - Google Cloud Storage and Firestore for data persistence and state management
 - Google Cloud Run for hosting the app
+
+## Note
+For image generation, you need to link your Google Cloud project to a billing account.
+The current model is set to `gemini-2.5-flash-image` (aka Nano Banana) to keep costs low.
+Set to `imagen-4.0-fast-generate-001` in `tools/generate_illustrations.ts` for better quality.
 
 ## Testing Locally
 To run and test the storybook locally before deploying:

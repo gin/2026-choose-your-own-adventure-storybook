@@ -20,31 +20,55 @@ export async function generateIllustration(args: any) {
 
         console.log(`Generating illustration for: ${args.prompt}`);
 
-        const response = await ai.models.generateImages({
-            model: 'gemini-2.5-flash-image',
-            // model: 'imagen-3.0-generate-002',
-            prompt: args.prompt,
+        const prompt = args.prompt.replace(/^["'\s]+|["'\s]+$/g, '').trim();
+        const response = await ai.models.generateContent({
+            // Failed to generate illustration: Error [ApiError]: {"error":{"code":429,"message":"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.5-flash-preview-image\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.5-flash-preview-image\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.5-flash-preview-image\nPlease retry in 1.357296117s.","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"model":"gemini-2.5-flash-preview-image","location":"global"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.5-flash-preview-image","location":"global"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.5-flash-preview-image","location":"global"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"1s"}]}}
+            // at async generateIllustration (src/tools/generate_illustration.ts:24:26) {
+            //   status: 429
+            // model: 'gemini-2.5-flash-image',
+
+            // Failed to generate illustration: Error [ApiError]: {"error":{"code":404,"message":"models/imagen-4.0-fast-generate-001 is not found for API version v1beta, or is not supported for generateContent. Call ListModels to see the list of available models and their supported methods.","status":"NOT_FOUND"}}
+            // model: 'imagen-4.0-fast-generate-001',
+            // model: 'imagen-4.0-generate-001',
+
+            // model: 'gemini-3.1-flash-image-preview',
+            // model: 'gemini-2.5-flash-image', // This works after linking Billing to project
+            model: '',
+
+            contents: prompt,
             config: {
-                numberOfImages: 1,
-                outputMimeType: 'image/jpeg',
-                aspectRatio: '4:3',
+                responseModalities: ['text', 'image'],
+                imageConfig: {
+                    aspectRatio: '1:1',
+                    imageSize: '1K',
+                },
             }
         });
-        const imageBase64 = response?.generatedImages?.[0]?.image?.imageBytes;
-        if (!imageBase64) throw new Error("No image generated");
-        const imageBuffer = Buffer.from(imageBase64, 'base64');
+
+        const inlineImage = response?.candidates?.[0]?.content?.parts?.find(
+            (part) => part.inlineData?.data,
+        )?.inlineData;
+        const imageData = inlineImage?.data;
+        if (!imageData) throw new Error('No image generated');
+        const mimeType = inlineImage?.mimeType || 'image/jpeg';
+        const mimeExtension = mimeType.split('/')[1]?.split('+')[0];
+        const overriddenExtension = {
+            'jpeg': 'jpg',
+        }[mimeExtension ?? ''] ?? mimeExtension;
+        const extension = overriddenExtension || 'jpg';
+        const imageBuffer = Buffer.from(imageData, 'base64');
 
         if (useLocal) {
-            const publicUrl = `data:image/jpeg;base64,${imageBase64}`;
+            const publicUrl = `data:${mimeType};base64,${imageData}`;
             console.log(`Image generated and served as local data URI`);
             return { success: true, url: publicUrl };
         }
 
         // Upload to Cloud Storage
-        const fileId = `${uuidv4()}.jpg`;
+        const fileId = `${uuidv4()}.${extension}`;
         const bucket = storage!.bucket(bucketName);
         const file = bucket.file(`images/${fileId}`);
-        await file.save(imageBuffer, { contentType: 'image/jpeg' });
+        await file.save(imageBuffer, { contentType: mimeType });
 
         const publicUrl = `https://storage.googleapis.com/${bucketName}/images/${fileId}`;
         console.log(`Image saved at: ${publicUrl}`);
