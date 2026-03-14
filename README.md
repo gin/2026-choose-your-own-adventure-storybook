@@ -40,7 +40,25 @@ To run and test the storybook locally before deploying:
 ```bash
 cd terraform
 terraform init
-terraform apply -var-file="dev.tfvars"
+terraform apply -var-file=dev.tfvars
+
+# 1. Auth Docker
+gcloud auth configure-docker us-central1-docker.pkg.dev
+
+# 2. Build (Replace [PROJECT_ID] with gen-lang-client-0572697337)
+docker build -t us-central1-docker.pkg.dev/gen-lang-client-0572697337/storybook-repo/app:latest .
+
+# 3. Push
+docker push us-central1-docker.pkg.dev/gen-lang-client-0572697337/storybook-repo/app:latest
+
+# In terraform/main.tf around line 105
+image = "us-central1-docker.pkg.dev/gen-lang-client-0572697337/storybook-repo/app:latest"
+
+# In terraform/main.tf around line 105
+image = "us-central1-docker.pkg.dev/gen-lang-client-0572697337/storybook-repo/app:latest"
+
+terraform apply -var-file=dev.tfvars
+
 ```
 
 ## Tear down when done testing in GCP dev environment 

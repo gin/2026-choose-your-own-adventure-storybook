@@ -31,6 +31,12 @@ resource "google_project_service" "firestore_api" {
   disable_on_destroy = false
 }
 
+resource "google_project_service" "artifactregistry_api" {
+  project = var.project_id
+  service = "artifactregistry.googleapis.com"
+  disable_on_destroy = false
+}
+
 # Cloud Storage Bucket for generated images/audio
 resource "google_storage_bucket" "multimodal_assets" {
   name          = "${var.project_id}-story-assets"
@@ -61,6 +67,16 @@ resource "google_firestore_database" "database" {
   type        = "FIRESTORE_NATIVE"
   
   depends_on = [google_project_service.firestore_api]
+}
+
+# Artifact Registry Repository
+resource "google_artifact_registry_repository" "storybook_repo" {
+  location      = var.region
+  repository_id = "storybook-repo"
+  description   = "Docker repository for the Storybook app"
+  format        = "DOCKER"
+  
+  depends_on = [google_project_service.artifactregistry_api]
 }
 
 # Service Account for Cloud Run

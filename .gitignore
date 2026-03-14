@@ -47,6 +47,7 @@ next-env.d.ts
 # terraform
 terraform.tfvars
 free-tier.tfvars
+dev.tfvars
 test.tfvars
 prod.tfvars
 
