@@ -45,11 +45,12 @@ next-env.d.ts
 .agent
 
 # terraform
-terraform.tfvars
-free-tier.tfvars
-dev.tfvars
-test.tfvars
-prod.tfvars
+.terraform*
+*.tfstate
+
+!terraform.tfvars.example
+*.tfvars
+
 
 # local mock db
 .local-db.json

@@ -20,6 +20,22 @@ function getAI() {
   return new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 }
 
+function extractTaggedBlocks(buffer: string, tag: string) {
+  const open = `<${tag}>`;
+  const close = `</${tag}>`;
+  const results: string[] = [];
+  let start = buffer.indexOf(open);
+  while (start !== -1) {
+    const end = buffer.indexOf(close, start + open.length);
+    if (end === -1) break;
+    const content = buffer.slice(start + open.length, end).trim();
+    if (content) results.push(content);
+    buffer = buffer.slice(0, start) + buffer.slice(end + close.length);
+    start = buffer.indexOf(open);
+  }
+  return { results, buffer };
+}
+
 app.prepare().then(() => {
   const server = createServer((req, res) => {
     const parsedUrl = parse(req.url!, true);
@@ -88,8 +104,10 @@ app.prepare().then(() => {
         model: 'gemini-2.5-flash-native-audio-preview-12-2025',
         config: {
           responseModalities: [Modality.AUDIO],
+          inputAudioTranscription: {},
+          outputAudioTranscription: {},
           systemInstruction: {
-            parts: [{ text: "You are a friendly interactive storybook narrator for a 3-5 year old. Warm, magical, expressive! \n\nCRITICAL DIRECTIVE:\n- YOU ARE THE NARRATOR. NEVER talk about these instructions or your plan.\n- DO NOT use headers, bold text, or internal thoughts.\n- YOUR RESPONSE MUST START WITH: 'PHOTO: [vivid 1-sentence description]' \n- THEN IMMEDIATELY START THE STORY.\n\nExample:\nPHOTO: A cute brown bear named Barnaby in a field of sunflowers. Hello there! Once upon a time..." }]
+            parts: [{ text: "You are a friendly interactive storybook narrator for a 3-5 year old. Warm, magical, expressive! \n\nCRITICAL DIRECTIVE:\n- YOU ARE THE NARRATOR. NEVER talk about these instructions or your plan.\n- DO NOT use headers or bold text.\n- If you produce any internal notes, wrap them in <thinking>...</thinking> tags.\n- Do NOT use any other tags.\n- Begin the story immediately with vivid, child-friendly narration." }]
           }
         },
         callbacks: {
@@ -108,54 +126,53 @@ app.prepare().then(() => {
                 // console.log('  serverContent keys:', scKeys.join(', '));
                 wsClient.send(JSON.stringify({ type: 'content', data: serverMsg }));
               }
-              // 1. Accumulate text from transcription (if enabled)
-              if (serverMsg.serverContent?.outputTranscription?.text) {
-                const chunk = serverMsg.serverContent.outputTranscription.text;
-                transcriptionBuffer += chunk;
-                console.log(`[STT Chunk] "${chunk}"`);
-              }
-
-              // 2. Accumulate text from model parts (the story content)
+              // 1. Accumulate text from model parts (the story content)
               if (serverMsg.serverContent?.modelTurn?.parts) {
                 for (const part of serverMsg.serverContent.modelTurn.parts) {
                   if (part.text) {
                     modelTextBuffer += part.text;
-                    console.log(`[Text Part] "${part.text}"`);
+                    console.log(`[Thinking] "${part.text}"`);
                   }
                 }
               }
 
-              // 3. Check for triggers in BOTH buffers
-              const unifiedBuffer = transcriptionBuffer + " | " + modelTextBuffer;
-              // Robust Regex: Look for trigger words, then capture everything until a sentence ender (. ! ?) or a pause
-              const regex = /(?:PHOTO|IMAGE|IMAGE_PROMPT|SCENE):\s*([^.!?]{10,})/i;
-              const match = unifiedBuffer.match(regex);
+              if (serverMsg.serverContent?.outputTranscription?.text) {
+                const chunk = serverMsg.serverContent.outputTranscription.text;
+                transcriptionBuffer += chunk;
+                console.log(`[Speaking] "${chunk}"`);
+              }
 
-              if (match && match[1]) {
-                let prompt = match[1].trim();
-                // Strip leading/trailing quotes if the model ignored instructions
-                prompt = prompt.replace(/^["']+|["']+$/g, '').trim();
+              // 2. Look for <image> tags to trigger illustration
+              if (modelTextBuffer.toLowerCase().includes('<image')) {
+                const extracted = extractTaggedBlocks(modelTextBuffer, 'image');
+                modelTextBuffer = extracted.buffer;
+                for (const promptRaw of extracted.results) {
+                  const prompt = promptRaw.replace(/^["']+|["']+$/g, '').trim();
+                  if (!prompt) continue;
+                  console.log(`[Image] "${prompt}"`);
+                  console.log(`>>> DETECTED IMAGE TAG: ${prompt}`);
+                  console.log(`>>> ATTEMPTING IMAGE GENERATION: ${prompt}`);
+                  generateIllustration({ prompt }).then(result => {
+                    if (result.success && result.url) {
+                      console.log(`>>> IMAGE READY: ${result.url.substring(0, 50)}...`);
+                      wsClient.send(JSON.stringify({
+                        type: 'illustration',
+                        data: { url: result.url }
+                      }));
+                    } else {
+                      console.error(">>> IMAGE GENERATION FAILED:", result.error);
+                    }
+                  }).catch(err => console.error(">>> TRIGGER ERROR:", err));
+                }
+              }
 
-                console.log(`>>> DETECTED IMAGE TRIGGER: ${prompt}`);
-
-                // Clear the trigger from the model buffer to prevent re-triggering
-                // We do a partial match-based replacement
-                const rawMatch = match[0];
-                transcriptionBuffer = transcriptionBuffer.replace(rawMatch, '');
-                modelTextBuffer = modelTextBuffer.replace(rawMatch, '');
-
-                console.log(`>>> ATTEMPTING IMAGE GENERATION: ${prompt}`);
-                generateIllustration({ prompt }).then(result => {
-                  if (result.success && result.url) {
-                    console.log(`>>> IMAGE READY: ${result.url.substring(0, 50)}...`);
-                    wsClient.send(JSON.stringify({
-                      type: 'illustration',
-                      data: { url: result.url }
-                    }));
-                  } else {
-                    console.error(">>> IMAGE GENERATION FAILED:", result.error);
-                  }
-                }).catch(err => console.error(">>> TRIGGER ERROR:", err));
+              if (modelTextBuffer.toLowerCase().includes('<speaking')) {
+                const extracted = extractTaggedBlocks(modelTextBuffer, 'speaking');
+                modelTextBuffer = extracted.buffer;
+                for (const line of extracted.results) {
+                  if (!line) continue;
+                  console.log(`[Speaking] "${line}"`);
+                }
               }
 
               // Handle setupComplete indicates session is ready
@@ -165,7 +182,6 @@ app.prepare().then(() => {
               // Reset buffer on turn boundaries
               if (serverMsg.serverContent?.turnComplete || serverMsg.serverContent?.interrupted) {
                 console.log(`--- Turn Complete / Interrupted - Clearing Buffers ---`);
-                transcriptionBuffer = '';
                 modelTextBuffer = '';
               }
             } catch (err) {
@@ -174,6 +190,12 @@ app.prepare().then(() => {
           },
           onerror: (e: any) => {
             console.error("Gemini Live API error:", e?.message || e);
+            try {
+              wsClient.send(JSON.stringify({
+                type: 'error',
+                data: { message: e?.message || 'Gemini Live API error' }
+              }));
+            } catch {}
           },
           onclose: (e: any) => {
             console.log("Gemini closed the connection:", e?.reason || 'no reason');
@@ -185,6 +207,12 @@ app.prepare().then(() => {
       wsClient.send(JSON.stringify({ type: 'connected' }));
     } catch (error: any) {
       console.error("Error connecting to Gemini Live API:", error?.message || error);
+      try {
+        wsClient.send(JSON.stringify({
+          type: 'error',
+          data: { message: error?.message || 'Failed to connect to Gemini Live API' }
+        }));
+      } catch {}
       wsClient.close();
     }
   });

@@ -13,8 +13,10 @@ export default function StoryBook() {
   
   const [isConnected, setIsConnected] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
-  const [storyText, setStoryText] = useState("Waiting for the story to begin...");
-  const [spokenText, setSpokenText] = useState("");
+  const [thinkingText, setThinkingText] = useState("Waiting for the story to begin...");
+  const [narrationText, setNarrationText] = useState("");
+  const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'error'>('connecting');
+  const [connectionMessage, setConnectionMessage] = useState<string>('Connecting...');
   const [illustration, setIllustration] = useState<string | null>(null);
   const [debugOpen, setDebugOpen] = useState(false);
   const [debugLog, setDebugLog] = useState<string[]>([]);
@@ -25,18 +27,55 @@ export default function StoryBook() {
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const processorRef = useRef<AudioWorkletNode | null>(null);
   const nextStartTimeRef = useRef(0);
-  const spokenTextEndRef = useRef<HTMLDivElement | null>(null);
-  const fullSpokenTextRef = useRef("");
+  const narrationEndRef = useRef<HTMLDivElement | null>(null);
+  const fullNarrationTextRef = useRef("");
+  const fullUserTextRef = useRef("");
+  const outputTranscriptSeenRef = useRef(false);
+  const taggedBufferRef = useRef("");
+  const lastSpeakingRef = useRef("");
+  const lastThinkingRef = useRef("");
+  const rawThinkingRef = useRef("");
+  const hasThinkingTagsRef = useRef(false);
 
   function addDebug(msg: string) {
     const timestamp = new Date().toLocaleTimeString();
     setDebugLog((prev) => [`[${timestamp}] ${msg}`, ...prev].slice(0, 50));
   }
 
-  // Auto-scroll "What I'm Saying" to show newest text
+  function extractTaggedBlocks(buffer: string, tag: string) {
+    const openRe = new RegExp(`<${tag}\\b[^>]*>`, 'i');
+    const closeRe = new RegExp(`</${tag}>`, 'i');
+    const results: string[] = [];
+    let openMatch = buffer.match(openRe);
+    while (openMatch && openMatch.index !== undefined) {
+      const start = openMatch.index;
+      const openLen = openMatch[0].length;
+      const afterOpen = start + openLen;
+      const closeMatch = buffer.slice(afterOpen).match(closeRe);
+      if (!closeMatch || closeMatch.index === undefined) break;
+      const end = afterOpen + closeMatch.index;
+      const content = buffer.slice(afterOpen, end).trim();
+      if (content) results.push(content);
+      const closeLen = closeMatch[0].length;
+      buffer = buffer.slice(0, start) + buffer.slice(end + closeLen);
+      openMatch = buffer.match(openRe);
+    }
+    return { results, buffer };
+  }
+
+  function extractTaggedPartial(buffer: string, tag: string) {
+    const openRe = new RegExp(`<${tag}\\b[^>]*>`, 'i');
+    const openMatch = buffer.match(openRe);
+    if (!openMatch || openMatch.index === undefined) return '';
+    const start = openMatch.index;
+    const openLen = openMatch[0].length;
+    return buffer.slice(start + openLen).trim();
+  }
+
+  // Auto-scroll narration to show newest text
   useEffect(() => {
-    spokenTextEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [spokenText]);
+    narrationEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [narrationText]);
 
   useEffect(() => {
     // Determine dynamic WebSocket URL based on host
@@ -44,11 +83,15 @@ export default function StoryBook() {
     const wsUrl = `${protocol}//${window.location.host}/api/live`;
     
     addDebug(`Connecting to ${wsUrl}...`);
+    setConnectionStatus('connecting');
+    setConnectionMessage('Connecting...');
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
     ws.onopen = () => {
       addDebug('WebSocket to proxy: OPEN');
+      setConnectionStatus('connecting');
+      setConnectionMessage('Proxy connected. Waiting for AI...');
     };
 
     ws.onmessage = async (event) => {
@@ -57,8 +100,15 @@ export default function StoryBook() {
         addDebug(`Received: ${msg.type}`);
         if (msg.type === 'connected') {
            setIsConnected(true);
+           setConnectionStatus('connected');
+           setConnectionMessage('Connected!');
            addDebug('Gemini Live API ready! Sending initial greeting...');
            ws.send(JSON.stringify({ type: 'text', text: "Hello! I am ready for my story." }));
+        } else if (msg.type === 'error') {
+           setIsConnected(false);
+           setConnectionStatus('error');
+           setConnectionMessage(msg.data?.message || 'Connection error');
+           addDebug(`Server error: ${msg.data?.message || 'unknown'}`);
         } else if (msg.type === 'illustration') {
            setIllustration(msg.data.url);
            addDebug('Got illustration URL');
@@ -72,18 +122,32 @@ export default function StoryBook() {
                const parts = serverContent.modelTurn.parts;
                for (const part of parts) {
                   if (part.text) {
-                     // Clear placeholder on first text
-                     setStoryText((prev) => {
-                        let newText = part.text
-                           .replace(/(?:PHOTO|IMAGE|IMAGE_PROMPT|SCENE):\s*([^.\n!?,]*)/gi, '')
-                           .replace(/\*\*.*?\*\*/g, '') // Remove markdown bold headers
-                           .replace(/#{1,6}\s.*/g, '')  // Remove markdown headers
-                           .trim();
-                        
-                        if (!newText) return prev;
-                        if (prev === "Waiting for the story to begin...") return newText;
-                        return prev + " " + newText;
-                     });
+                     rawThinkingRef.current += part.text;
+                     if (!hasThinkingTagsRef.current) {
+                       setThinkingText(rawThinkingRef.current.trim());
+                     }
+                     taggedBufferRef.current += part.text;
+
+                     const speaking = extractTaggedBlocks(taggedBufferRef.current, 'speaking');
+                     taggedBufferRef.current = speaking.buffer;
+                     if (speaking.results.length) {
+                       lastSpeakingRef.current += speaking.results.join(' ');
+                       setNarrationText(lastSpeakingRef.current.trim());
+                     } else {
+                       const partialSpeaking = extractTaggedPartial(taggedBufferRef.current, 'speaking');
+                       if (partialSpeaking) {
+                         setNarrationText((lastSpeakingRef.current + ' ' + partialSpeaking).trim());
+                       }
+                     }
+
+                     const thinking = extractTaggedBlocks(taggedBufferRef.current, 'thinking');
+                     taggedBufferRef.current = thinking.buffer;
+                     if (thinking.results.length) {
+                       hasThinkingTagsRef.current = true;
+                       lastThinkingRef.current += thinking.results.join(' ');
+                       setThinkingText(lastThinkingRef.current.trim());
+                     }
+
                      addDebug(`Text: "${part.text.substring(0, 40)}..."`);
                   }
                   if (part.inlineData && part.inlineData.data) {
@@ -93,25 +157,21 @@ export default function StoryBook() {
                }
             }
 
+             // Handle output audio transcription (narration)
+             if (serverContent?.outputTranscription?.text) {
+                const chunk = serverContent.outputTranscription.text;
+                fullNarrationTextRef.current += chunk;
+                setNarrationText(fullNarrationTextRef.current.trim());
+                addDebug(`Speaking chunk: "${chunk.substring(0, 20)}"`);
+             }
+
              // Handle input audio transcription (what the USER is saying)
              if (serverContent?.inputTranscription?.text) {
                 const chunk = serverContent.inputTranscription.text;
-                fullSpokenTextRef.current += chunk;
-                setSpokenText(fullSpokenTextRef.current);
-                addDebug(`User spoken chunk: "${chunk.substring(0, 20)}"`);
-             }
-
-             // Handle output audio transcription (if enabled)
-             if (serverContent?.outputTranscription?.text) {
-                const chunk = serverContent.outputTranscription.text;
-                // fullSpokenTextRef.current += chunk; // This line is now for user input only
-                addDebug(`Spoken chunk: "${chunk.substring(0, 20)}"`);
-             }
-
-             // Update the display text based on the full buffer (filtering out triggers)
-             if (serverContent?.modelTurn || serverContent?.outputTranscription) {
+                fullUserTextRef.current += chunk;
+                
                 // 1. Strip complete tags (all formats)
-                let display = fullSpokenTextRef.current
+                let display = fullUserTextRef.current
                    .replace(/(?:PHOTO|IMAGE|IMAGE_PROMPT|SCENE):\s*([^.\n!?,]*)/gi, '')
                    .replace(/\[\[IMAGE:.*?\]\]/gi, '');
 
@@ -119,18 +179,21 @@ export default function StoryBook() {
                 display = display.replace(/(?:PHOTO|IMAGE|IMAGE_PROMPT|SCENE):\s*.*$/i, '');
                 display = display.replace(/\[\[[^\]]*$/, '');
                 
-                setSpokenText(display);
+                addDebug(`User spoken chunk: "${chunk.substring(0, 20)}"`);
              }
+
            // Handle interrupted turns
            if (serverContent?.interrupted) {
               addDebug('Model turn was interrupted by user');
-              fullSpokenTextRef.current += '\n[interrupted]\n';
-              setSpokenText((prev) => prev + '\n[interrupted]\n');
            }
            if (serverContent?.turnComplete) {
               addDebug('Turn complete');
-              fullSpokenTextRef.current = ""; // Reset buffer for next turn
-              setSpokenText((prev) => prev + '\n\n');
+              fullNarrationTextRef.current = ""; // Reset buffer for next turn
+              fullUserTextRef.current = "";
+              outputTranscriptSeenRef.current = false;
+              taggedBufferRef.current = "";
+              rawThinkingRef.current = "";
+              hasThinkingTagsRef.current = false;
            }
         }
       } catch (err) {
@@ -140,11 +203,15 @@ export default function StoryBook() {
 
     ws.onerror = (e) => {
       addDebug(`WebSocket error: ${JSON.stringify(e)}`);
+      setConnectionStatus('error');
+      setConnectionMessage('WebSocket error. Check server logs.');
     };
 
     ws.onclose = (e) => {
       addDebug(`WebSocket closed: code=${e.code} reason=${e.reason}`);
       setIsConnected(false);
+      setConnectionStatus('error');
+      setConnectionMessage(e.reason ? `Disconnected: ${e.reason}` : `Disconnected (code ${e.code})`);
     };
 
     return () => {
@@ -244,18 +311,24 @@ export default function StoryBook() {
   };
 
   return (
-    <main className="min-h-screen bg-brand-background flex flex-col items-center justify-start p-4 sm:p-8">
+    <main className="min-h-screen bg-brand-background flex flex-col items-center justify-start p-4 sm:p-8 relative">
       <header className="w-full max-w-4xl flex justify-between items-center mb-8">
         <h1 className="text-3xl font-extrabold text-brand-purple flex items-center gap-2">
           <Sparkles className="w-8 h-8 text-brand-yellow" />
           Magic Storybook
         </h1>
-        <div className={`px-4 py-2 rounded-full font-bold text-white ${isConnected ? 'bg-brand-green' : 'bg-gray-400'}`}>
-           {isConnected ? 'Connected!' : 'Connecting...'}
+        <div className={`px-4 py-2 rounded-full font-bold text-white ${
+          connectionStatus === 'connected'
+            ? 'bg-brand-green'
+            : connectionStatus === 'error'
+            ? 'bg-brand-pink'
+            : 'bg-gray-400'
+        }`}>
+           {connectionMessage}
         </div>
       </header>
       
-      <div className="w-full max-w-4xl grid grid-cols-1 md:grid-cols-2 gap-8 flex-1">
+      <div className="w-full max-w-4xl grid grid-cols-1 md:grid-cols-2 gap-8 flex-1 pb-28 items-stretch">
         {/* Visual / Illustration Area */}
         <div className="card-playful flex flex-col bg-white overflow-hidden relative min-h-[400px]">
            {illustration ? (
@@ -274,53 +347,16 @@ export default function StoryBook() {
            )}
         </div>
 
-        {/* Text and Interaction Area */}
-        <div className="flex flex-col gap-6">
-           {/* What I'm Thinking box (THE STORY) */}
-           <div className="card-playful flex-1 flex flex-col">
-              <h2 className="text-2xl font-bold text-brand-pink mb-4">🧠 The Story So Far...</h2>
-              <div className="flex-1 overflow-y-auto">
-                 <p className="text-xl font-medium text-gray-800 leading-relaxed whitespace-pre-wrap">
-                    {storyText}
-                 </p>
-                 <div ref={spokenTextEndRef} className="h-4" />
-              </div>
-           </div>
-
-           {/* What I'm Saying box (USER INPUT) */}
-           <div className="card-playful flex flex-col max-h-48">
-              <h2 className="text-xl font-bold text-brand-blue mb-2">💬 My Choices</h2>
+        {/* Text Area */}
+        <div className="flex flex-col gap-6 h-full">
+           {/* What I'm Saying box (NARRATION) */}
+           <div className="card-playful flex flex-col flex-1">
+              <h2 className="text-xl font-bold text-brand-blue mb-2">💬 What I am saying</h2>
               <div className="overflow-y-auto">
                  <p className="text-md font-medium text-gray-500 leading-relaxed italic">
-                    {spokenText || "Ready to listen to you..."}
+                    {narrationText || "Waiting for narration..."}
                  </p>
-              </div>
-           </div>
-
-           <div className="card-playful py-6 flex flex-col items-center justify-center bg-blue-50">
-              <p className="font-bold text-lg mb-4 text-center text-brand-blue">
-                 {isRecording ? "I am listening to you! Tell me what to do next!" : "Tap the mic when you want to interrupt or make a choice!"}
-              </p>
-              <div className="flex items-center gap-4">
-                <motion.button 
-                   whileHover={{ scale: 1.1 }}
-                   whileTap={{ scale: 0.9 }}
-                   onClick={isRecording ? stopRecording : startRecording}
-                   className={`p-8 rounded-full shadow-lg ${isRecording ? 'bg-brand-pink animate-pulse' : 'bg-brand-blue'} text-white transition-colors`}
-                >
-                   {isRecording ? <MicOff className="w-12 h-12" /> : <Mic className="w-12 h-12" />}
-                </motion.button>
-
-                <motion.button
-                   whileHover={{ scale: 1.05 }}
-                   whileTap={{ scale: 0.95 }}
-                   onClick={() => setDebugOpen(!debugOpen)}
-                   className="p-4 rounded-full bg-gray-200 text-gray-600 hover:bg-gray-300 transition-colors"
-                   title="Toggle debug log"
-                >
-                   <Bug className="w-6 h-6" />
-                   {debugOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                </motion.button>
+                 <div ref={narrationEndRef} className="h-4" />
               </div>
            </div>
 
@@ -333,6 +369,14 @@ export default function StoryBook() {
                   exit={{ height: 0, opacity: 0 }}
                   className="overflow-hidden"
                >
+                 <div className="card-playful flex flex-col mb-4">
+                   <h2 className="text-xl font-bold text-brand-pink mb-2">🧠 What I am thinking (debug)</h2>
+                   <div className="max-h-60 overflow-y-auto">
+                     <p className="text-md font-medium text-gray-700 leading-relaxed whitespace-pre-wrap">
+                       {thinkingText}
+                     </p>
+                   </div>
+                 </div>
                  <div className="card-playful bg-gray-900 text-green-400 p-4 rounded-2xl max-h-60 overflow-y-auto font-mono text-xs">
                    <div className="flex justify-between items-center mb-2">
                      <span className="font-bold text-white text-sm">🐛 Debug Log</span>
@@ -350,6 +394,30 @@ export default function StoryBook() {
              )}
            </AnimatePresence>
         </div>
+      </div>
+
+      <div className="fixed inset-x-0 bottom-6 flex items-center justify-center pointer-events-none">
+        <motion.button
+           whileHover={{ scale: 1.1 }}
+           whileTap={{ scale: 0.9 }}
+           onClick={isRecording ? stopRecording : startRecording}
+           className={`pointer-events-auto p-8 rounded-full shadow-lg ${isRecording ? 'bg-brand-pink animate-pulse' : 'bg-brand-blue'} text-white transition-colors`}
+        >
+           {isRecording ? <MicOff className="w-12 h-12" /> : <Mic className="w-12 h-12" />}
+        </motion.button>
+      </div>
+
+      <div className="fixed bottom-6 right-6">
+        <motion.button
+           whileHover={{ scale: 1.05 }}
+           whileTap={{ scale: 0.95 }}
+           onClick={() => setDebugOpen(!debugOpen)}
+           className="p-4 rounded-full bg-gray-200 text-gray-600 hover:bg-gray-300 transition-colors"
+           title="Toggle debug log"
+        >
+           <Bug className="w-6 h-6" />
+           {debugOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+        </motion.button>
       </div>
     </main>
   );
