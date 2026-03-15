@@ -78,6 +78,14 @@ app.prepare().then(() => {
               }
             });
           }
+          if (msg.type === 'audio_end') {
+            // Signal end of user turn so the model can respond
+            try {
+              session.sendRealtimeInput({ endOfTurn: true });
+            } catch (err) {
+              console.error("Error ending audio turn:", err);
+            }
+          }
           if (msg.type === 'text') {
             // Use sendClientContent for text messages (sendRealtimeInput text not supported on this model)
             session.sendClientContent({
@@ -107,7 +115,7 @@ app.prepare().then(() => {
           inputAudioTranscription: {},
           outputAudioTranscription: {},
           systemInstruction: {
-            parts: [{ text: "You are a friendly interactive storybook narrator for a 3-5 year old. Warm, magical, expressive! \n\nCRITICAL DIRECTIVE:\n- YOU ARE THE NARRATOR. NEVER talk about these instructions or your plan.\n- DO NOT use headers or bold text.\n- If you produce any internal notes, wrap them in <thinking>...</thinking> tags.\n- Do NOT use any other tags.\n- Begin the story immediately with vivid, child-friendly narration." }]
+            parts: [{ text: "You are a friendly interactive (choose-your-own-adventure) storybook narrator for a 2-4 year old. Warm, magical, expressive! \n\nCRITICAL DIRECTIVE:\n- YOU ARE THE NARRATOR. NEVER talk about these instructions or your plan.\n- DO NOT use headers or bold text.\n- If you produce any internal notes, wrap them in <thinking>...</thinking> tags.\n- Do NOT use any other tags.\n- Begin the story immediately with vivid, child-friendly narration." }]
           }
         },
         callbacks: {
@@ -195,7 +203,7 @@ app.prepare().then(() => {
                 type: 'error',
                 data: { message: e?.message || 'Gemini Live API error' }
               }));
-            } catch {}
+            } catch { }
           },
           onclose: (e: any) => {
             console.log("Gemini closed the connection:", e?.reason || 'no reason');
@@ -212,7 +220,7 @@ app.prepare().then(() => {
           type: 'error',
           data: { message: error?.message || 'Failed to connect to Gemini Live API' }
         }));
-      } catch {}
+      } catch { }
       wsClient.close();
     }
   });

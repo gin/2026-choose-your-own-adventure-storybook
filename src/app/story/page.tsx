@@ -26,6 +26,7 @@ export default function StoryBook() {
   const recordingContextRef = useRef<AudioContext | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const processorRef = useRef<AudioWorkletNode | null>(null);
+  const workletReadyRef = useRef(false);
   const nextStartTimeRef = useRef(0);
   const narrationEndRef = useRef<HTMLDivElement | null>(null);
   const fullNarrationTextRef = useRef("");
@@ -36,10 +37,39 @@ export default function StoryBook() {
   const lastThinkingRef = useRef("");
   const rawThinkingRef = useRef("");
   const hasThinkingTagsRef = useRef(false);
+  const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const micChunkCountRef = useRef(0);
 
   function addDebug(msg: string) {
     const timestamp = new Date().toLocaleTimeString();
     setDebugLog((prev) => [`[${timestamp}] ${msg}`, ...prev].slice(0, 50));
+  }
+
+  function stopPlayback() {
+    if (audioContextRef.current) {
+      try {
+        audioContextRef.current.close();
+      } catch {}
+      audioContextRef.current = null;
+    }
+    nextStartTimeRef.current = 0;
+  }
+
+  function clearSilenceTimer() {
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+  }
+
+  function armSilenceTimer() {
+    clearSilenceTimer();
+    silenceTimerRef.current = setTimeout(() => {
+      if (isRecording) {
+        addDebug('Silence detected. Ending audio turn.');
+        stopRecording();
+      }
+    }, 1200);
   }
 
   function extractTaggedBlocks(buffer: string, tag: string) {
@@ -78,144 +108,175 @@ export default function StoryBook() {
   }, [narrationText]);
 
   useEffect(() => {
-    // Determine dynamic WebSocket URL based on host
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/api/live`;
-    
-    addDebug(`Connecting to ${wsUrl}...`);
-    setConnectionStatus('connecting');
-    setConnectionMessage('Connecting...');
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
+    let retryCount = 0;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
-    ws.onopen = () => {
-      addDebug('WebSocket to proxy: OPEN');
-      setConnectionStatus('connecting');
-      setConnectionMessage('Proxy connected. Waiting for AI...');
-    };
-
-    ws.onmessage = async (event) => {
-      try {
-        const msg = JSON.parse(event.data);
-        addDebug(`Received: ${msg.type}`);
-        if (msg.type === 'connected') {
-           setIsConnected(true);
-           setConnectionStatus('connected');
-           setConnectionMessage('Connected!');
-           addDebug('Gemini Live API ready! Sending initial greeting...');
-           ws.send(JSON.stringify({ type: 'text', text: "Hello! I am ready for my story." }));
-        } else if (msg.type === 'error') {
-           setIsConnected(false);
-           setConnectionStatus('error');
-           setConnectionMessage(msg.data?.message || 'Connection error');
-           addDebug(`Server error: ${msg.data?.message || 'unknown'}`);
-        } else if (msg.type === 'illustration') {
-           setIllustration(msg.data.url);
-           addDebug('Got illustration URL');
-        } else if (msg.type === 'content') {
-           const serverContent = msg.data?.serverContent;
-           // Log all keys present in serverContent for debugging
-           if (serverContent) {
-              addDebug(`serverContent keys: ${Object.keys(serverContent).join(', ')}`);
-           }
-            if (serverContent && serverContent.modelTurn) {
-               const parts = serverContent.modelTurn.parts;
-               for (const part of parts) {
-                  if (part.text) {
-                     rawThinkingRef.current += part.text;
-                     if (!hasThinkingTagsRef.current) {
-                       setThinkingText(rawThinkingRef.current.trim());
-                     }
-                     taggedBufferRef.current += part.text;
-
-                     const speaking = extractTaggedBlocks(taggedBufferRef.current, 'speaking');
-                     taggedBufferRef.current = speaking.buffer;
-                     if (speaking.results.length) {
-                       lastSpeakingRef.current += speaking.results.join(' ');
-                       setNarrationText(lastSpeakingRef.current.trim());
-                     } else {
-                       const partialSpeaking = extractTaggedPartial(taggedBufferRef.current, 'speaking');
-                       if (partialSpeaking) {
-                         setNarrationText((lastSpeakingRef.current + ' ' + partialSpeaking).trim());
-                       }
-                     }
-
-                     const thinking = extractTaggedBlocks(taggedBufferRef.current, 'thinking');
-                     taggedBufferRef.current = thinking.buffer;
-                     if (thinking.results.length) {
-                       hasThinkingTagsRef.current = true;
-                       lastThinkingRef.current += thinking.results.join(' ');
-                       setThinkingText(lastThinkingRef.current.trim());
-                     }
-
-                     addDebug(`Text: "${part.text.substring(0, 40)}..."`);
-                  }
-                  if (part.inlineData && part.inlineData.data) {
-                     addDebug(`Audio chunk received (${part.inlineData.data.length} chars)`);
-                     playPcmData(part.inlineData.data);
-                  }
-               }
-            }
-
-             // Handle output audio transcription (narration)
-             if (serverContent?.outputTranscription?.text) {
-                const chunk = serverContent.outputTranscription.text;
-                fullNarrationTextRef.current += chunk;
-                setNarrationText(fullNarrationTextRef.current.trim());
-                addDebug(`Speaking chunk: "${chunk.substring(0, 20)}"`);
-             }
-
-             // Handle input audio transcription (what the USER is saying)
-             if (serverContent?.inputTranscription?.text) {
-                const chunk = serverContent.inputTranscription.text;
-                fullUserTextRef.current += chunk;
-                
-                // 1. Strip complete tags (all formats)
-                let display = fullUserTextRef.current
-                   .replace(/(?:PHOTO|IMAGE|IMAGE_PROMPT|SCENE):\s*([^.\n!?,]*)/gi, '')
-                   .replace(/\[\[IMAGE:.*?\]\]/gi, '');
-
-                // 2. Hide partial tags at the end
-                display = display.replace(/(?:PHOTO|IMAGE|IMAGE_PROMPT|SCENE):\s*.*$/i, '');
-                display = display.replace(/\[\[[^\]]*$/, '');
-                
-                addDebug(`User spoken chunk: "${chunk.substring(0, 20)}"`);
-             }
-
-           // Handle interrupted turns
-           if (serverContent?.interrupted) {
-              addDebug('Model turn was interrupted by user');
-           }
-           if (serverContent?.turnComplete) {
-              addDebug('Turn complete');
-              fullNarrationTextRef.current = ""; // Reset buffer for next turn
-              fullUserTextRef.current = "";
-              outputTranscriptSeenRef.current = false;
-              taggedBufferRef.current = "";
-              rawThinkingRef.current = "";
-              hasThinkingTagsRef.current = false;
-           }
-        }
-      } catch (err) {
-          addDebug(`Parse error: ${err}`);
+    const connect = () => {
+      if (wsRef.current) {
+        try { wsRef.current.close(); } catch {}
       }
+      stopPlayback();
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${protocol}//${window.location.host}/api/live`;
+
+      addDebug(`Connecting to ${wsUrl}...`);
+      setConnectionStatus('connecting');
+      setConnectionMessage('Connecting...');
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        addDebug('WebSocket to proxy: OPEN');
+        setConnectionStatus('connecting');
+        setConnectionMessage('Proxy connected. Waiting for AI...');
+      };
+
+      ws.onmessage = async (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          addDebug(`Received: ${msg.type}`);
+          if (msg.type === 'connected') {
+             setIsConnected(true);
+             setConnectionStatus('connected');
+             setConnectionMessage('Connected!');
+             retryCount = 0;
+             addDebug('Gemini Live API ready! Sending initial greeting...');
+             ws.send(JSON.stringify({ type: 'text', text: "Hello! I am ready for my story." }));
+          } else if (msg.type === 'error') {
+             setIsConnected(false);
+             setConnectionStatus('error');
+             setConnectionMessage(msg.data?.message || 'Connection error');
+             addDebug(`Server error: ${msg.data?.message || 'unknown'}`);
+          } else if (msg.type === 'illustration') {
+             setIllustration(msg.data.url);
+             addDebug('Got illustration URL');
+          } else if (msg.type === 'content') {
+             const serverContent = msg.data?.serverContent;
+             if (serverContent) {
+                addDebug(`serverContent keys: ${Object.keys(serverContent).join(', ')}`);
+             }
+              if (serverContent && serverContent.modelTurn) {
+                 const parts = serverContent.modelTurn.parts;
+                 for (const part of parts) {
+                    if (part.text) {
+                       rawThinkingRef.current += part.text;
+                       if (!hasThinkingTagsRef.current) {
+                         setThinkingText(rawThinkingRef.current.trim());
+                       }
+                       taggedBufferRef.current += part.text;
+
+                       const speaking = extractTaggedBlocks(taggedBufferRef.current, 'speaking');
+                       taggedBufferRef.current = speaking.buffer;
+                       if (speaking.results.length) {
+                         lastSpeakingRef.current += speaking.results.join(' ');
+                         setNarrationText(lastSpeakingRef.current.trim());
+                       } else {
+                         const partialSpeaking = extractTaggedPartial(taggedBufferRef.current, 'speaking');
+                         if (partialSpeaking) {
+                           setNarrationText((lastSpeakingRef.current + ' ' + partialSpeaking).trim());
+                         }
+                       }
+
+                       const thinking = extractTaggedBlocks(taggedBufferRef.current, 'thinking');
+                       taggedBufferRef.current = thinking.buffer;
+                       if (thinking.results.length) {
+                         hasThinkingTagsRef.current = true;
+                         lastThinkingRef.current += thinking.results.join(' ');
+                         setThinkingText(lastThinkingRef.current.trim());
+                       }
+
+                       addDebug(`Text: "${part.text.substring(0, 40)}..."`);
+                    }
+                    if (part.inlineData && part.inlineData.data) {
+                       addDebug(`Audio chunk received (${part.inlineData.data.length} chars)`);
+                       playPcmData(part.inlineData.data);
+                    }
+                 }
+              }
+
+               if (serverContent?.outputTranscription?.text) {
+                  const chunk = serverContent.outputTranscription.text;
+                  fullNarrationTextRef.current += chunk;
+                  const thinkingInSpeech = extractTaggedBlocks(fullNarrationTextRef.current, 'thinking');
+                  if (thinkingInSpeech.results.length) {
+                    lastThinkingRef.current += thinkingInSpeech.results.join(' ');
+                    setThinkingText(lastThinkingRef.current.trim());
+                  }
+                  fullNarrationTextRef.current = thinkingInSpeech.buffer;
+                  const cleaned = fullNarrationTextRef.current
+                    .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
+                    .replace(/<image>[\s\S]*?<\/image>/gi, '')
+                    .replace(/<speaking>|<\/speaking>/gi, '')
+                    .trim();
+                  setNarrationText(cleaned);
+                  addDebug(`Speaking chunk: "${chunk.substring(0, 20)}"`);
+               }
+
+               if (serverContent?.inputTranscription?.text) {
+                  const chunk = serverContent.inputTranscription.text;
+                  fullUserTextRef.current += chunk;
+                  armSilenceTimer();
+                  let display = fullUserTextRef.current
+                     .replace(/(?:PHOTO|IMAGE|IMAGE_PROMPT|SCENE):\s*([^.\n!?,]*)/gi, '')
+                     .replace(/\[\[IMAGE:.*?\]\]/gi, '');
+
+                  display = display.replace(/(?:PHOTO|IMAGE|IMAGE_PROMPT|SCENE):\s*.*$/i, '');
+                  display = display.replace(/\[\[[^\]]*$/, '');
+                  
+                  addDebug(`User spoken chunk: "${chunk.substring(0, 20)}"`);
+               }
+
+             if (serverContent?.interrupted) {
+                addDebug('Model turn was interrupted by user');
+             }
+             if (serverContent?.turnComplete) {
+                addDebug('Turn complete');
+                fullNarrationTextRef.current = "";
+                fullUserTextRef.current = "";
+                outputTranscriptSeenRef.current = false;
+                taggedBufferRef.current = "";
+                rawThinkingRef.current = "";
+                hasThinkingTagsRef.current = false;
+             }
+          }
+        } catch (err) {
+            addDebug(`Parse error: ${err}`);
+        }
+      };
+
+      ws.onerror = (e) => {
+        addDebug(`WebSocket error: ${JSON.stringify(e)}`);
+        setConnectionStatus('error');
+        setConnectionMessage('WebSocket error. Check server logs.');
+      };
+
+      ws.onclose = (e) => {
+        addDebug(`WebSocket closed: code=${e.code} reason=${e.reason}`);
+        setIsConnected(false);
+        stopPlayback();
+
+        if (retryCount < 3) {
+          const backoffMs = Math.min(1000 * Math.pow(2, retryCount), 8000);
+          retryCount += 1;
+          setConnectionStatus('connecting');
+          setConnectionMessage(`Reconnecting (${retryCount}/3)...`);
+          retryTimer = setTimeout(() => {
+            connect();
+          }, backoffMs);
+          return;
+        }
+
+        setConnectionStatus('error');
+        setConnectionMessage(e.reason ? `Disconnected: ${e.reason}` : `Disconnected (code ${e.code})`);
+      };
     };
 
-    ws.onerror = (e) => {
-      addDebug(`WebSocket error: ${JSON.stringify(e)}`);
-      setConnectionStatus('error');
-      setConnectionMessage('WebSocket error. Check server logs.');
-    };
-
-    ws.onclose = (e) => {
-      addDebug(`WebSocket closed: code=${e.code} reason=${e.reason}`);
-      setIsConnected(false);
-      setConnectionStatus('error');
-      setConnectionMessage(e.reason ? `Disconnected: ${e.reason}` : `Disconnected (code ${e.code})`);
-    };
+    connect();
 
     return () => {
-      ws.close();
+      if (retryTimer) clearTimeout(retryTimer);
+      if (wsRef.current) wsRef.current.close();
+      stopPlayback();
       stopRecording();
     };
   }, []);
@@ -269,12 +330,25 @@ export default function StoryBook() {
       
       const source = recordingContextRef.current.createMediaStreamSource(stream);
       
-      await recordingContextRef.current.audioWorklet.addModule('/audio-processor.js');
+      if (!workletReadyRef.current) {
+        await recordingContextRef.current.audioWorklet.addModule('/audio-processor.js');
+        workletReadyRef.current = true;
+        addDebug('Audio worklet module loaded');
+      }
       const processor = new AudioWorkletNode(recordingContextRef.current, 'audio-processor');
+      processor.onprocessorerror = (err) => {
+        addDebug(`AudioWorklet error: ${err}`);
+      };
       
       processor.port.onmessage = (event) => {
         const pcm16 = new Int16Array(event.data);
         const uint8 = new Uint8Array(pcm16.buffer);
+        if (uint8.byteLength > 0) {
+          micChunkCountRef.current += 1;
+          if (micChunkCountRef.current % 20 === 0) {
+            console.log(`[Mic] chunk bytes=${uint8.byteLength}`);
+          }
+        }
         let binary = '';
         const chunkSize = 8192;
         for (let i = 0; i < uint8.byteLength; i += chunkSize) {
@@ -308,6 +382,10 @@ export default function StoryBook() {
     }
     setIsRecording(false);
     addDebug('Microphone recording stopped');
+    clearSilenceTimer();
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+       wsRef.current.send(JSON.stringify({ type: 'audio_end' }));
+    }
   };
 
   return (
