@@ -311,7 +311,7 @@ export default function StoryBook() {
   };
 
   return (
-    <main className="min-h-screen bg-brand-background flex flex-col items-center justify-start p-4 sm:p-8 relative">
+    <main className="min-h-screen flex flex-col items-center justify-start p-4 sm:p-8 relative book-shell">
       <header className="w-full max-w-4xl flex justify-between items-center mb-8">
         <h1 className="text-3xl font-extrabold text-brand-purple flex items-center gap-2">
           <Sparkles className="w-8 h-8 text-brand-yellow" />
@@ -328,9 +328,9 @@ export default function StoryBook() {
         </div>
       </header>
       
-      <div className="w-full max-w-4xl grid grid-cols-1 md:grid-cols-2 gap-8 flex-1 pb-28 items-stretch">
+      <div className="w-full max-w-6xl grid grid-cols-1 md:grid-cols-2 gap-8 flex-1 pb-28 items-stretch book-spread">
         {/* Visual / Illustration Area */}
-        <div className="card-playful flex flex-col bg-white overflow-hidden relative min-h-[400px]">
+        <div className="card-playful book-page flex flex-col overflow-hidden relative min-h-[400px]">
            {illustration ? (
              <motion.img 
                 initial={{ opacity: 0, scale: 0.9 }}
@@ -350,10 +350,10 @@ export default function StoryBook() {
         {/* Text Area */}
         <div className="flex flex-col gap-6 h-full">
            {/* What I'm Saying box (NARRATION) */}
-           <div className="card-playful flex flex-col flex-1">
+           <div className="card-playful book-page flex flex-col flex-1">
               <h2 className="text-xl font-bold text-brand-blue mb-2">💬 What I am saying</h2>
               <div className="overflow-y-auto">
-                 <p className="text-md font-medium text-gray-500 leading-relaxed italic">
+                 <p className="text-xl font-semibold text-gray-700 leading-relaxed">
                     {narrationText || "Waiting for narration..."}
                  </p>
                  <div ref={narrationEndRef} className="h-4" />
