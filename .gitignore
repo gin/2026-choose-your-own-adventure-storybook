@@ -1,5 +1,3 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-
 # dependencies
 node_modules
 /.pnp
@@ -46,11 +44,10 @@ next-env.d.ts
 
 # terraform
 .terraform*
-*.tfstate
+*.tfstate*
 
 !terraform.tfvars.example
 *.tfvars
-
 
 # local mock db
 .local-db.json
