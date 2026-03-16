@@ -118,7 +118,12 @@ resource "google_cloud_run_v2_service" "storybook_app" {
       max_instance_count = 2
     }
     containers {
-      image = "us-docker.pkg.dev/cloudrun/container/hello" # Placeholder image
+      image = "us-central1-docker.pkg.dev/${var.project_id}/storybook-repo/app:latest"
+      
+      ports {
+        container_port = 3000
+      }
+
       env {
         name  = "GOOGLE_CLOUD_PROJECT"
         value = var.project_id
@@ -126,6 +131,10 @@ resource "google_cloud_run_v2_service" "storybook_app" {
       env {
         name  = "GCS_BUCKET_NAME"
         value = google_storage_bucket.multimodal_assets.name
+      }
+      env {
+        name  = "GEMINI_API_KEY"
+        value = var.gemini_api_key
       }
     }
   }
