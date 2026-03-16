@@ -27,6 +27,7 @@ function StoryBookContent() {
   const storyStartSentRef = useRef(false);
   const lastStoryStartAtRef = useRef(0);
   const lastGreetingAtRef = useRef(0);
+  const turnHistoryRef = useRef<{ role: 'user' | 'model'; text: string }[]>([]);
   
   const wsRef = useRef<WebSocket | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -53,6 +54,12 @@ function StoryBookContent() {
   const shouldReconnectRef = useRef(true);
   const connectAttemptRef = useRef(0);
   const connectingRef = useRef(false);
+  const isRecordingRef = useRef(false);
+  const awaitingModelResponseRef = useRef(false);
+  const responseRetryCountRef = useRef(0);
+  const responseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const maxRecordingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingRecoveryTextRef = useRef<string | null>(null);
 
   function addDebug(msg: string) {
     const timestamp = new Date().toLocaleTimeString();
@@ -84,6 +91,58 @@ function StoryBookContent() {
     }
   }
 
+  function clearResponseTimer() {
+    if (responseTimerRef.current) {
+      clearTimeout(responseTimerRef.current);
+      responseTimerRef.current = null;
+    }
+  }
+
+  function clearMaxRecordingTimer() {
+    if (maxRecordingTimerRef.current) {
+      clearTimeout(maxRecordingTimerRef.current);
+      maxRecordingTimerRef.current = null;
+    }
+  }
+
+  function clearAwaitingModelResponse() {
+    awaitingModelResponseRef.current = false;
+    responseRetryCountRef.current = 0;
+    clearResponseTimer();
+  }
+
+  function armModelResponseTimer() {
+    clearResponseTimer();
+    awaitingModelResponseRef.current = true;
+    responseTimerRef.current = setTimeout(() => {
+      if (!awaitingModelResponseRef.current) return;
+
+      if (responseRetryCountRef.current < 1) {
+        responseRetryCountRef.current += 1;
+        addDebug('No model response after audio turn. Retrying end-of-turn signal.');
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ type: 'audio_end' }));
+        }
+        armModelResponseTimer();
+        return;
+      }
+
+      const recoveryText = fullUserTextRef.current.trim();
+      pendingRecoveryTextRef.current = recoveryText || null;
+      addDebug(
+        recoveryText
+          ? 'Model did not respond after retry. Reconnecting and retrying from transcript.'
+          : 'Model did not respond after retry. Reconnecting live session.',
+      );
+      clearAwaitingModelResponse();
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        try {
+          wsRef.current.close(1011, 'recovering stalled live session');
+        } catch {}
+      }
+    }, 8000);
+  }
+
   function getSentenceIndexAtChar(text: string, charIndex: number) {
     const sentences = splitSentences(text);
     if (sentences.length === 0) return -1;
@@ -107,7 +166,7 @@ function StoryBookContent() {
   function armSilenceTimer() {
     clearSilenceTimer();
     silenceTimerRef.current = setTimeout(() => {
-      if (isRecording) {
+      if (isRecordingRef.current) {
         addDebug('Silence detected. Ending audio turn.');
         stopRecording();
       }
@@ -148,6 +207,22 @@ function StoryBookContent() {
     const matches = text.match(/[^.!?]+[.!?]+|[^.!?]+$/g);
     if (!matches) return [];
     return matches.map((s) => s.trim()).filter(Boolean);
+  }
+
+  function buildResumePrompt(recoveryText: string) {
+    const recentTurns = turnHistoryRef.current
+      .slice(-6)
+      .map((turn) => `${turn.role === 'user' ? 'Child' : 'Narrator'}: ${turn.text}`)
+      .join('\n');
+
+    return [
+      'Continue the same ongoing choose-your-own-adventure story.',
+      recentTurns ? `Story so far:\n${recentTurns}` : '',
+      `The child now says: ${recoveryText}`,
+      'Respond by continuing the story naturally from this point.',
+    ]
+      .filter(Boolean)
+      .join('\n\n');
   }
 
   // Auto-scroll narration to show newest text
@@ -221,9 +296,10 @@ function StoryBookContent() {
              setConnectionMessage('Connected!');
              retryCount = 0;
              addDebug('Gemini Live API ready!');
-             const now = Date.now();
-             if (!storyStartSentRef.current && now - lastStoryStartAtRef.current > 5000) {
-               storyStartSentRef.current = true;
+	             const now = Date.now();
+	             const recoveryText = pendingRecoveryTextRef.current;
+	             if (!storyStartSentRef.current && now - lastStoryStartAtRef.current > 5000) {
+	               storyStartSentRef.current = true;
                lastStoryStartAtRef.current = now;
                addDebug('Sending story start + initial greeting...');
                if (sessionId) {
@@ -239,16 +315,26 @@ function StoryBookContent() {
                    addDebug('Session fetch error');
                  }
                }
-               ws.send(JSON.stringify({
-                 type: 'story_start',
-                 prompt: 'Create a warm, magical opening storybook illustration featuring the child from the reference photo as the hero.',
-                 referenceImageUrl: heroImageUrlRef.current
-               }));
-             }
-             if (now - lastGreetingAtRef.current > 5000) {
-               lastGreetingAtRef.current = now;
-               ws.send(JSON.stringify({ type: 'text', text: "Hello! I am ready for my story." }));
-             } else {
+	               ws.send(JSON.stringify({
+	                 type: 'story_start',
+	                 prompt: 'Create a warm, magical opening storybook illustration featuring the child from the reference photo as the hero.',
+	                 referenceImageUrl: heroImageUrlRef.current
+	               }));
+	             }
+	             if (heroImageUrlRef.current) {
+	               ws.send(JSON.stringify({
+	                 type: 'session_context',
+	                 referenceImageUrl: heroImageUrlRef.current
+	               }));
+	             }
+	             if (recoveryText) {
+	               pendingRecoveryTextRef.current = null;
+	               addDebug('Replaying last user transcript after reconnect');
+	               ws.send(JSON.stringify({ type: 'text', text: buildResumePrompt(recoveryText) }));
+	             } else if (now - lastGreetingAtRef.current > 5000) {
+	               lastGreetingAtRef.current = now;
+	               ws.send(JSON.stringify({ type: 'text', text: "Hello! I am ready for my story." }));
+	             } else {
                addDebug('Skipping greeting (throttled)');
              }
           } else if (msg.type === 'error') {
@@ -268,6 +354,16 @@ function StoryBookContent() {
              const serverContent = msg.data?.serverContent;
              if (serverContent) {
                 addDebug(`serverContent keys: ${Object.keys(serverContent).join(', ')}`);
+             }
+             if (
+               awaitingModelResponseRef.current &&
+               (
+                 serverContent?.outputTranscription?.text ||
+                 serverContent?.modelTurn?.parts?.length
+               )
+             ) {
+               addDebug('Model response started');
+               clearAwaitingModelResponse();
              }
               if (serverContent && serverContent.modelTurn) {
                  const parts = serverContent.modelTurn.parts;
@@ -343,9 +439,20 @@ function StoryBookContent() {
 
              if (serverContent?.interrupted) {
                 addDebug('Model turn was interrupted by user');
+                clearAwaitingModelResponse();
              }
             if (serverContent?.turnComplete) {
                addDebug('Turn complete');
+               clearAwaitingModelResponse();
+               const completedUserText = fullUserTextRef.current.trim();
+               const completedNarrationText = narrationTextRef.current.trim();
+               if (completedUserText) {
+                 turnHistoryRef.current.push({ role: 'user', text: completedUserText });
+               }
+               if (completedNarrationText) {
+                 turnHistoryRef.current.push({ role: 'model', text: completedNarrationText });
+               }
+               turnHistoryRef.current = turnHistoryRef.current.slice(-10);
                fullNarrationTextRef.current = "";
                narrationTextRef.current = "";
                fullUserTextRef.current = "";
@@ -367,6 +474,7 @@ function StoryBookContent() {
         if (attemptId !== connectAttemptRef.current) return;
         connectingRef.current = false;
         addDebug(`WebSocket error: ${JSON.stringify(e)}`);
+        clearAwaitingModelResponse();
         setConnectionStatus('error');
         setConnectionMessage('WebSocket error. Check server logs.');
       };
@@ -376,6 +484,7 @@ function StoryBookContent() {
         connectingRef.current = false;
         addDebug(`WebSocket closed: code=${e.code} reason=${e.reason}`);
         setIsConnected(false);
+        clearAwaitingModelResponse();
         stopPlayback();
         if (!shouldReconnectRef.current) {
           return;
@@ -405,6 +514,8 @@ function StoryBookContent() {
       if (retryTimer) clearTimeout(retryTimer);
       shouldReconnectRef.current = false;
       clearHighlightTimer();
+      clearAwaitingModelResponse();
+      clearMaxRecordingTimer();
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) wsRef.current.close();
       stopPlayback();
       stopRecording();
@@ -496,6 +607,13 @@ function StoryBookContent() {
       source.connect(processor);
       processor.connect(recordingContextRef.current.destination);
       processorRef.current = processor;
+      clearMaxRecordingTimer();
+      maxRecordingTimerRef.current = setTimeout(() => {
+        if (!isRecordingRef.current) return;
+        addDebug('Max recording time reached. Ending audio turn.');
+        stopRecording();
+      }, 10000);
+      isRecordingRef.current = true;
       setIsRecording(true);
       addDebug('Microphone recording started');
     } catch (err) {
@@ -513,11 +631,14 @@ function StoryBookContent() {
        mediaStreamRef.current.getTracks().forEach((t: any) => t.stop());
        mediaStreamRef.current = null;
     }
+    isRecordingRef.current = false;
     setIsRecording(false);
     addDebug('Microphone recording stopped');
     clearSilenceTimer();
+    clearMaxRecordingTimer();
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
        wsRef.current.send(JSON.stringify({ type: 'audio_end' }));
+       armModelResponseTimer();
     }
   };
 

@@ -52,7 +52,7 @@ gcloud config set project [PROJECT_ID]
 gcloud auth configure-docker [REGION]-docker.pkg.dev
 # gcloud auth configure-docker us-central1-docker.pkg.dev
 
-# 2. Build
+# 2. Build (alternatively, update variables in package.json to run `npm run deploy` to replace docker build and docker push commands)
 cd ..
 docker build --platform linux/amd64 -t [REGION]-docker.pkg.dev/[PROJECT_ID]/storybook-repo/app:latest .
 # docker build --platform linux/amd64 -t us-central1-docker.pkg.dev/gen-lang-client-0572697337/storybook-repo/app:latest .
@@ -67,7 +67,7 @@ terraform apply -var-file=dev.tfvars
 ```
 
 ## Tear down when done testing in GCP dev environment 
-1. Run `terraform destroy -var-file="dev.tfvars"` to delete the Cloud Run service and stop incurring idle costs.
+1. Run `terraform destroy -var-file=dev.tfvars` to delete the Cloud Run service and stop incurring idle costs.
 
 ## ⚠️ Important Cost Precautions
 When running generative AI models and cloud infrastructure, it is incredibly important to protect yourself against accidental charges.
@@ -75,4 +75,4 @@ When running generative AI models and cloud infrastructure, it is incredibly imp
 1. **Set up a Billing Alert:** Go to the [Google Cloud Billing Console](https://console.cloud.google.com/billing) and create a Budget Alert (e.g., alert me at $1.00, $5.00, and $10.00). This won't hard-stop your app, but it will email you immediately if costs spike.
 2. **Hard-cap Cloud Run:** To prevent a billing spike from a sudden surge in traffic (or an infinite loop), the `terraform/main.tf` file has been configured with `max_instance_count = 2`. This guarantees Cloud Run will never scale past 2 instances.
 3. **API Cost Awareness:** The Gemini Live API and Vertex AI Imagen 3 API are charged per-request and by input/output tokens. During development, constantly check your Vertex AI billing page.
-4. **Tear down when done:** The best protection is cleaning up. When you are done testing on the cloud, run **`terraform destroy -var-file="dev.tfvars"`** to delete the Cloud Run service and stop incurring idle costs.
+4. **Tear down when done:** The best protection is cleaning up. When you are done testing on the cloud, run **`terraform destroy -var-file=dev.tfvars`** to delete the Cloud Run service and stop incurring idle costs.
