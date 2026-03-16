@@ -8,6 +8,13 @@ const useLocal = process.env.USE_LOCAL_MOCKS === 'true' || !process.env.GCS_BUCK
 const storage = useLocal ? null : new Storage();
 const bucketName = process.env.GCS_BUCKET_NAME || 'storybook-assets-dev'; // Need to be configured
 
+function parseDataUrl(dataUrl?: string) {
+    if (!dataUrl) return null;
+    const match = /^data:([^;]+);base64,(.+)$/i.exec(dataUrl.trim());
+    if (!match) return null;
+    return { mimeType: match[1], data: match[2] };
+}
+
 export async function generateIllustration(args: any) {
     if (!args.prompt) return { error: "prompt is required" };
 
@@ -21,6 +28,17 @@ export async function generateIllustration(args: any) {
         console.log(`Generating illustration for: ${args.prompt}`);
 
         const prompt = args.prompt.replace(/^["'\s]+|["'\s]+$/g, '').trim();
+        const referenceImage = parseDataUrl(args.referenceImageUrl || args.heroImageUrl);
+        const contents = referenceImage
+            ? [{
+                role: 'user',
+                parts: [
+                    { text: prompt },
+                    { inlineData: { mimeType: referenceImage.mimeType, data: referenceImage.data } }
+                ]
+            }]
+            : prompt;
+
         const response = await ai.models.generateContent({
             // Failed to generate illustration: Error [ApiError]: {"error":{"code":429,"message":"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.5-flash-preview-image\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.5-flash-preview-image\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.5-flash-preview-image\nPlease retry in 1.357296117s.","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerMinute-FreeTier","quotaDimensions":{"model":"gemini-2.5-flash-preview-image","location":"global"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.5-flash-preview-image","location":"global"}},{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaDimensions":{"model":"gemini-2.5-flash-preview-image","location":"global"}}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"1s"}]}}
             // at async generateIllustration (src/tools/generate_illustration.ts:24:26) {
@@ -32,10 +50,10 @@ export async function generateIllustration(args: any) {
             // model: 'imagen-4.0-generate-001',
 
             // model: 'gemini-3.1-flash-image-preview',
-            // model: 'gemini-2.5-flash-image', // This works after linking Billing to project
-            model: '',
+            model: 'gemini-2.5-flash-image', // This works after linking Billing to project
+            // model: '',
 
-            contents: prompt,
+            contents,
             config: {
                 responseModalities: ['text', 'image'],
                 imageConfig: {

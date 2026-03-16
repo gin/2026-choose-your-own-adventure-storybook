@@ -42,21 +42,26 @@ cd terraform
 terraform init
 terraform apply -var-file=dev.tfvars
 
+# Replace [REGION] and [PROJECT_ID] with your own values.
+# Example below the command.
+# 0. Set your project
+gcloud config set project [PROJECT_ID]
+# gcloud config set project gen-lang-client-0572697337
+
 # 1. Auth Docker
-gcloud auth configure-docker us-central1-docker.pkg.dev
+gcloud auth configure-docker [REGION]-docker.pkg.dev
+# gcloud auth configure-docker us-central1-docker.pkg.dev
 
-# 2. Build (Replace [PROJECT_ID] with gen-lang-client-0572697337)
-docker build -t us-central1-docker.pkg.dev/gen-lang-client-0572697337/storybook-repo/app:latest .
+# 2. Build
+cd ..
+docker build --platform linux/amd64 -t [REGION]-docker.pkg.dev/[PROJECT_ID]/storybook-repo/app:latest .
+# docker build --platform linux/amd64 -t us-central1-docker.pkg.dev/gen-lang-client-0572697337/storybook-repo/app:latest .
 
-# 3. Push
-docker push us-central1-docker.pkg.dev/gen-lang-client-0572697337/storybook-repo/app:latest
+# 3. Push to Google Cloud Run
+docker push [REGION]-docker.pkg.dev/[PROJECT_ID]/storybook-repo/app:latest
+# docker push us-central1-docker.pkg.dev/gen-lang-client-0572697337/storybook-repo/app:latest
 
-# In terraform/main.tf around line 105
-image = "us-central1-docker.pkg.dev/gen-lang-client-0572697337/storybook-repo/app:latest"
-
-# In terraform/main.tf around line 105
-image = "us-central1-docker.pkg.dev/gen-lang-client-0572697337/storybook-repo/app:latest"
-
+# 4. Update Google Cloud Run config
 terraform apply -var-file=dev.tfvars
 
 ```

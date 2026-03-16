@@ -1,49 +1,90 @@
 "use client";
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { Camera, Sparkles, Wand2 } from 'lucide-react';
 
-export default function Onboarding() {
+function OnboardingContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const persona = searchParams.get('character') || 'capybara';
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const hasPlayedRef = useRef(false);
 
   const [hasPhoto, setHasPhoto] = useState(false);
   const [photoDataUrl, setPhotoDataUrl] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
+  const [cameraError, setCameraError] = useState<string | null>(null);
+  const [stream, setStream] = useState<MediaStream | null>(null);
+
+  const ensureVideoPlaying = () => {
+    const video = videoRef.current;
+    if (!video || !stream || hasPhoto) return;
+    if (video.srcObject !== stream) {
+      video.srcObject = stream;
+      hasPlayedRef.current = false;
+      return;
+    }
+    if (!hasPlayedRef.current && video.readyState >= 2) {
+      hasPlayedRef.current = true;
+      video.play().catch(e => console.error("Video play failed:", e));
+    }
+  };
+
+  const setupCamera = async () => {
+    setCameraError(null);
+    try {
+      // Check if we are in a secure context
+      if (typeof window !== 'undefined' && !window.isSecureContext && window.location.hostname !== 'localhost') {
+          setCameraError("Webcam requires a secure (HTTPS) connection to work in production.");
+          return;
+      }
+
+      const newStream = await navigator.mediaDevices.getUserMedia({ 
+        video: { 
+          facingMode: 'user',
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
+        } 
+      });
+      setStream(newStream);
+    } catch (err: any) {
+      console.error("Camera setup failed:", err);
+      if (err.name === 'NotAllowedError') {
+          setCameraError("Camera access was denied. Please check your browser's site settings.");
+      } else if (err.name === 'NotFoundError') {
+          setCameraError("No camera found. Please connect one and try again.");
+      } else {
+          setCameraError(`Camera error: ${err.message || 'Unknown error'}`);
+      }
+    }
+  };
 
   useEffect(() => {
-    // Request webcam access
-    navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } })
-      .then((stream) => {
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-        }
-      })
-      .catch((err) => {
-        console.error("Camera error:", err);
-      });
-
+    setupCamera();
     return () => {
-      // Cleanup camera stream
-      if (videoRef.current && videoRef.current.srcObject) {
-         const stream = videoRef.current.srcObject as MediaStream;
-         stream.getTracks().forEach(track => track.stop());
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
       }
     };
   }, []);
+
+  // Ensure stream is attached to video element if it re-renders or stream arrives late
+  useEffect(() => {
+    if (videoRef.current && stream && !hasPhoto) {
+      ensureVideoPlaying();
+    }
+  }, [stream, hasPhoto]);
 
   const takePhoto = () => {
     if (videoRef.current && canvasRef.current) {
       const video = videoRef.current;
       const canvas = canvasRef.current;
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
+      canvas.width = video.videoWidth || 640;
+      canvas.height = video.videoHeight || 480;
       const ctx = canvas.getContext('2d');
       if (ctx) {
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
@@ -98,12 +139,29 @@ export default function Onboarding() {
         </p>
 
         <div className="rounded-3xl overflow-hidden border-8 border-brand-yellow mx-auto w-full max-w-[400px] mb-8 relative aspect-video bg-gray-100 flex items-center justify-center">
-          {!hasPhoto ? (
+          {cameraError ? (
+            <div className="p-8 text-brand-pink font-bold text-center">
+              <p className="mb-2 text-xl">⚠️ Oops!</p>
+              <p className="text-sm mb-4">{cameraError}</p>
+              <button 
+                onClick={setupCamera}
+                className="text-xs bg-brand-pink text-white px-4 py-2 rounded-full uppercase tracking-widest hover:bg-brand-purple transition-colors"
+              >
+                Try Again
+              </button>
+            </div>
+          ) : !hasPhoto ? (
             <video
               ref={videoRef}
               autoPlay
               playsInline
+              muted
+              controls={false}
+              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
               className="w-full h-full object-cover"
+              onLoadedMetadata={() => {
+                ensureVideoPlaying();
+              }}
             />
           ) : (
             <img src={photoDataUrl!} alt="You!" className="w-full h-full object-cover" />
@@ -117,9 +175,10 @@ export default function Onboarding() {
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.9 }}
             onClick={takePhoto}
-            className="btn-bouncy flex items-center justify-center gap-3 w-full max-w-sm mx-auto text-2xl"
+            disabled={!!cameraError || !stream}
+            className={`btn-bouncy flex items-center justify-center gap-3 w-full max-w-sm mx-auto text-2xl ${cameraError || !stream ? 'opacity-50 cursor-not-allowed' : ''}`}
           >
-            Say Cheese! 📸
+            {stream ? 'Say Cheese! 📸' : 'Starting Camera...'}
           </motion.button>
         ) : (
           <div className="flex gap-4 max-w-md mx-auto">
@@ -143,5 +202,13 @@ export default function Onboarding() {
         )}
       </motion.div>
     </main>
+  );
+}
+
+export default function Onboarding() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center text-2xl font-bold text-brand-purple">Loading Magic...</div>}>
+      <OnboardingContent />
+    </Suspense>
   );
 }

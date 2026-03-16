@@ -2,11 +2,19 @@
   "name": "next_temp",
   "version": "0.1.0",
   "private": true,
+  "config": {
+    "project_id": "gen-lang-client-0572697337",
+    "registry": "us-central1-docker.pkg.dev",
+    "repo": "storybook-repo"
+  },
   "scripts": {
     "dev": "tsx server.ts",
     "build": "next build",
     "start": "NODE_ENV=production tsx server.ts",
-    "lint": "eslint"
+    "lint": "eslint",
+    "deploy:build": "docker build --platform linux/amd64 -t $npm_package_config_registry/$npm_package_config_project_id/$npm_package_config_repo/app:latest .",
+    "deploy:push": "docker push $npm_package_config_registry/$npm_package_config_project_id/$npm_package_config_repo/app:latest",
+    "deploy": "npm run deploy:build && npm run deploy:push"
   },
   "dependencies": {
     "@google-cloud/firestore": "^8.3.0",

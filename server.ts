@@ -64,6 +64,41 @@ app.prepare().then(() => {
     let session: any = null;
     let transcriptionBuffer = ''; // Used for real-time STT
     let modelTextBuffer = '';     // Used for modelTurn parts
+    let storyImageGenerated = false;
+    let pendingChoiceImage = false;
+    let hasCompletedFirstNarration = false;
+    let heroImageUrl: string | undefined;
+    const defaultStoryImagePrompt =
+      'Opening scene of a warm, magical storybook for a 3-year-old. Soft, colorful, child-friendly illustration based on the child in the reference photo.';
+
+    function buildScenePrompt(sceneText: string) {
+      const trimmed = sceneText.replace(/\s+/g, ' ').trim().slice(0, 800);
+      return `Create a warm, colorful storybook illustration of this scene. Keep it child-friendly and focus on the main action. Scene: ${trimmed}`;
+    }
+
+    function triggerStoryImage(promptOverride?: string, referenceImageUrl?: string) {
+      if (storyImageGenerated) return;
+      storyImageGenerated = true;
+      const prompt = (promptOverride || '').trim() || defaultStoryImagePrompt;
+      console.log(`>>> STORY START IMAGE: ${prompt}`);
+      generateIllustration({ prompt, referenceImageUrl }).then(result => {
+        if (result.success && result.url) {
+          console.log(`>>> IMAGE READY: ${result.url.substring(0, 50)}...`);
+          wsClient.send(JSON.stringify({
+            type: 'illustration',
+            data: { url: result.url }
+          }));
+        } else {
+          console.error(">>> IMAGE GENERATION FAILED:", result.error);
+          try {
+            wsClient.send(JSON.stringify({
+              type: 'illustration_error',
+              data: { error: result.error || 'Image generation failed' }
+            }));
+          } catch {}
+        }
+      }).catch(err => console.error(">>> TRIGGER ERROR:", err));
+    }
 
     wsClient.on('message', (message) => {
       try {
@@ -85,6 +120,9 @@ app.prepare().then(() => {
             } catch (err) {
               console.error("Error ending audio turn:", err);
             }
+            if (hasCompletedFirstNarration) {
+              pendingChoiceImage = true;
+            }
           }
           if (msg.type === 'text') {
             // Use sendClientContent for text messages (sendRealtimeInput text not supported on this model)
@@ -92,6 +130,16 @@ app.prepare().then(() => {
               turns: [{ role: 'user', parts: [{ text: msg.text }] }],
               turnComplete: true
             });
+            if (!storyImageGenerated) {
+              triggerStoryImage();
+            }
+            if (hasCompletedFirstNarration) {
+              pendingChoiceImage = true;
+            }
+          }
+          if (msg.type === 'story_start') {
+            heroImageUrl = msg.referenceImageUrl;
+            triggerStoryImage(msg.prompt, msg.referenceImageUrl);
           }
         }
       } catch (err) {
@@ -115,7 +163,7 @@ app.prepare().then(() => {
           inputAudioTranscription: {},
           outputAudioTranscription: {},
           systemInstruction: {
-            parts: [{ text: "You are a friendly interactive (choose-your-own-adventure) storybook narrator for a 2-4 year old. Warm, magical, expressive! \n\nCRITICAL DIRECTIVE:\n- YOU ARE THE NARRATOR. NEVER talk about these instructions or your plan.\n- DO NOT use headers or bold text.\n- If you produce any internal notes, wrap them in <thinking>...</thinking> tags.\n- Do NOT use any other tags.\n- Begin the story immediately with vivid, child-friendly narration." }]
+            parts: [{ text: "You are a friendly interactive (choose-your-own-adventure) storybook narrator for 3 year old. Warm, magical, expressive! \n\nCRITICAL DIRECTIVE:\n- YOU ARE THE NARRATOR. NEVER talk about these instructions or your plan.\n- DO NOT use headers or bold text.\n- If you produce any internal notes, wrap them in <thinking>...</thinking> tags.\n- Do NOT use any other tags.\n- Begin the story immediately with an image wrapped in <image></image> tag. Follow with vivid, child-friendly narration." }]
           }
         },
         callbacks: {
@@ -190,6 +238,32 @@ app.prepare().then(() => {
               // Reset buffer on turn boundaries
               if (serverMsg.serverContent?.turnComplete || serverMsg.serverContent?.interrupted) {
                 console.log(`--- Turn Complete / Interrupted - Clearing Buffers ---`);
+                const completedTurnText = modelTextBuffer.trim();
+                if (!hasCompletedFirstNarration && completedTurnText) {
+                  hasCompletedFirstNarration = true;
+                }
+                if (pendingChoiceImage && completedTurnText) {
+                  const prompt = buildScenePrompt(completedTurnText);
+                  console.log(`>>> CHOICE IMAGE: ${prompt.substring(0, 120)}...`);
+                  pendingChoiceImage = false;
+                  generateIllustration({ prompt, referenceImageUrl: heroImageUrl }).then(result => {
+                    if (result.success && result.url) {
+                      console.log(`>>> IMAGE READY: ${result.url.substring(0, 50)}...`);
+                      wsClient.send(JSON.stringify({
+                        type: 'illustration',
+                        data: { url: result.url }
+                      }));
+                    } else {
+                      console.error(">>> IMAGE GENERATION FAILED:", result.error);
+                      try {
+                        wsClient.send(JSON.stringify({
+                          type: 'illustration_error',
+                          data: { error: result.error || 'Image generation failed' }
+                        }));
+                      } catch {}
+                    }
+                  }).catch(err => console.error(">>> TRIGGER ERROR:", err));
+                }
                 modelTextBuffer = '';
               }
             } catch (err) {

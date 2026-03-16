@@ -2,12 +2,12 @@
 // @ts-nocheck
 "use client";
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Mic, MicOff, Image as ImageIcon, Sparkles, Bug, ChevronDown, ChevronUp } from 'lucide-react';
 
-export default function StoryBook() {
+function StoryBookContent() {
   const searchParams = useSearchParams();
   const sessionId = searchParams.get('session');
   
@@ -15,11 +15,18 @@ export default function StoryBook() {
   const [isRecording, setIsRecording] = useState(false);
   const [thinkingText, setThinkingText] = useState("Waiting for the story to begin...");
   const [narrationText, setNarrationText] = useState("");
+  const [highlightEnabled, setHighlightEnabled] = useState(true);
+  const [highlightIndex, setHighlightIndex] = useState<number>(-1);
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'error'>('connecting');
   const [connectionMessage, setConnectionMessage] = useState<string>('Connecting...');
   const [illustration, setIllustration] = useState<string | null>(null);
+  const [illustrationFallback, setIllustrationFallback] = useState(false);
   const [debugOpen, setDebugOpen] = useState(false);
   const [debugLog, setDebugLog] = useState<string[]>([]);
+  const heroImageUrlRef = useRef<string | null>(null);
+  const storyStartSentRef = useRef(false);
+  const lastStoryStartAtRef = useRef(0);
+  const lastGreetingAtRef = useRef(0);
   
   const wsRef = useRef<WebSocket | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -30,6 +37,7 @@ export default function StoryBook() {
   const nextStartTimeRef = useRef(0);
   const narrationEndRef = useRef<HTMLDivElement | null>(null);
   const fullNarrationTextRef = useRef("");
+  const narrationTextRef = useRef("");
   const fullUserTextRef = useRef("");
   const outputTranscriptSeenRef = useRef(false);
   const taggedBufferRef = useRef("");
@@ -39,6 +47,12 @@ export default function StoryBook() {
   const hasThinkingTagsRef = useRef(false);
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const micChunkCountRef = useRef(0);
+  const playbackStartTimeRef = useRef<number | null>(null);
+  const lastHighlightIndexRef = useRef<number>(-1);
+  const highlightTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const shouldReconnectRef = useRef(true);
+  const connectAttemptRef = useRef(0);
+  const connectingRef = useRef(false);
 
   function addDebug(msg: string) {
     const timestamp = new Date().toLocaleTimeString();
@@ -53,6 +67,7 @@ export default function StoryBook() {
       audioContextRef.current = null;
     }
     nextStartTimeRef.current = 0;
+    playbackStartTimeRef.current = null;
   }
 
   function clearSilenceTimer() {
@@ -60,6 +75,33 @@ export default function StoryBook() {
       clearTimeout(silenceTimerRef.current);
       silenceTimerRef.current = null;
     }
+  }
+
+  function clearHighlightTimer() {
+    if (highlightTimerRef.current) {
+      clearInterval(highlightTimerRef.current);
+      highlightTimerRef.current = null;
+    }
+  }
+
+  function getSentenceIndexAtChar(text: string, charIndex: number) {
+    const sentences = splitSentences(text);
+    if (sentences.length === 0) return -1;
+    const normalized = sentences.join(' ');
+    const safeIndex = Math.max(0, Math.min(charIndex, normalized.length - 1));
+    let cursor = 0;
+    for (let i = 0; i < sentences.length; i++) {
+      const len = sentences[i].length;
+      const end = cursor + len;
+      if (safeIndex <= end) return i;
+      cursor = end + 1;
+    }
+    return sentences.length - 1;
+  }
+
+  function estimateCharIndex(elapsedSeconds: number) {
+    const charsPerSecond = 14;
+    return Math.floor(elapsedSeconds * charsPerSecond);
   }
 
   function armSilenceTimer() {
@@ -102,19 +144,53 @@ export default function StoryBook() {
     return buffer.slice(start + openLen).trim();
   }
 
+  function splitSentences(text: string) {
+    const matches = text.match(/[^.!?]+[.!?]+|[^.!?]+$/g);
+    if (!matches) return [];
+    return matches.map((s) => s.trim()).filter(Boolean);
+  }
+
   // Auto-scroll narration to show newest text
   useEffect(() => {
     narrationEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [narrationText]);
 
   useEffect(() => {
+    storyStartSentRef.current = false;
+    heroImageUrlRef.current = null;
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (!highlightEnabled) return;
+    clearHighlightTimer();
+    highlightTimerRef.current = setInterval(() => {
+      if (!audioContextRef.current || playbackStartTimeRef.current === null) return;
+      const elapsed = audioContextRef.current.currentTime - playbackStartTimeRef.current;
+      if (elapsed < 0) return;
+      const text = narrationTextRef.current;
+      if (!text) return;
+      const idx = getSentenceIndexAtChar(text, estimateCharIndex(elapsed));
+      if (idx !== lastHighlightIndexRef.current) {
+        lastHighlightIndexRef.current = idx;
+        setHighlightIndex(idx);
+      }
+    }, 250);
+    return () => clearHighlightTimer();
+  }, [highlightEnabled]);
+
+  useEffect(() => {
     let retryCount = 0;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    shouldReconnectRef.current = true;
+    connectingRef.current = false;
 
     const connect = () => {
-      if (wsRef.current) {
-        try { wsRef.current.close(); } catch {}
+      if (connectingRef.current) return;
+      if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
+        return;
       }
+      connectingRef.current = true;
+      const attemptId = ++connectAttemptRef.current;
       stopPlayback();
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const wsUrl = `${protocol}//${window.location.host}/api/live`;
@@ -126,6 +202,8 @@ export default function StoryBook() {
       wsRef.current = ws;
 
       ws.onopen = () => {
+        if (attemptId !== connectAttemptRef.current) return;
+        connectingRef.current = false;
         addDebug('WebSocket to proxy: OPEN');
         setConnectionStatus('connecting');
         setConnectionMessage('Proxy connected. Waiting for AI...');
@@ -133,23 +211,59 @@ export default function StoryBook() {
 
       ws.onmessage = async (event) => {
         try {
+          if (attemptId !== connectAttemptRef.current) return;
           const msg = JSON.parse(event.data);
           addDebug(`Received: ${msg.type}`);
           if (msg.type === 'connected') {
+             connectingRef.current = false;
              setIsConnected(true);
              setConnectionStatus('connected');
              setConnectionMessage('Connected!');
              retryCount = 0;
-             addDebug('Gemini Live API ready! Sending initial greeting...');
-             ws.send(JSON.stringify({ type: 'text', text: "Hello! I am ready for my story." }));
+             addDebug('Gemini Live API ready!');
+             const now = Date.now();
+             if (!storyStartSentRef.current && now - lastStoryStartAtRef.current > 5000) {
+               storyStartSentRef.current = true;
+               lastStoryStartAtRef.current = now;
+               addDebug('Sending story start + initial greeting...');
+               if (sessionId) {
+                 try {
+                   const res = await fetch(`/api/session/${sessionId}`);
+                   if (res.ok) {
+                     const data = await res.json();
+                     heroImageUrlRef.current = data.heroImageUrl || null;
+                   } else {
+                     addDebug(`Session fetch failed: ${res.status}`);
+                   }
+                 } catch (e) {
+                   addDebug('Session fetch error');
+                 }
+               }
+               ws.send(JSON.stringify({
+                 type: 'story_start',
+                 prompt: 'Create a warm, magical opening storybook illustration featuring the child from the reference photo as the hero.',
+                 referenceImageUrl: heroImageUrlRef.current
+               }));
+             }
+             if (now - lastGreetingAtRef.current > 5000) {
+               lastGreetingAtRef.current = now;
+               ws.send(JSON.stringify({ type: 'text', text: "Hello! I am ready for my story." }));
+             } else {
+               addDebug('Skipping greeting (throttled)');
+             }
           } else if (msg.type === 'error') {
              setIsConnected(false);
              setConnectionStatus('error');
              setConnectionMessage(msg.data?.message || 'Connection error');
              addDebug(`Server error: ${msg.data?.message || 'unknown'}`);
           } else if (msg.type === 'illustration') {
-             setIllustration(msg.data.url);
+             setIllustration(msg.data.url || heroImageUrlRef.current);
+             setIllustrationFallback(false);
              addDebug('Got illustration URL');
+          } else if (msg.type === 'illustration_error') {
+             setIllustration(heroImageUrlRef.current);
+             setIllustrationFallback(true);
+             addDebug(`Illustration failed, using webcam photo`);
           } else if (msg.type === 'content') {
              const serverContent = msg.data?.serverContent;
              if (serverContent) {
@@ -209,6 +323,7 @@ export default function StoryBook() {
                     .replace(/<speaking>|<\/speaking>/gi, '')
                     .trim();
                   setNarrationText(cleaned);
+                  narrationTextRef.current = cleaned;
                   addDebug(`Speaking chunk: "${chunk.substring(0, 20)}"`);
                }
 
@@ -229,15 +344,19 @@ export default function StoryBook() {
              if (serverContent?.interrupted) {
                 addDebug('Model turn was interrupted by user');
              }
-             if (serverContent?.turnComplete) {
-                addDebug('Turn complete');
-                fullNarrationTextRef.current = "";
-                fullUserTextRef.current = "";
-                outputTranscriptSeenRef.current = false;
-                taggedBufferRef.current = "";
-                rawThinkingRef.current = "";
-                hasThinkingTagsRef.current = false;
-             }
+            if (serverContent?.turnComplete) {
+               addDebug('Turn complete');
+               fullNarrationTextRef.current = "";
+               narrationTextRef.current = "";
+               fullUserTextRef.current = "";
+               outputTranscriptSeenRef.current = false;
+               taggedBufferRef.current = "";
+               rawThinkingRef.current = "";
+               hasThinkingTagsRef.current = false;
+               playbackStartTimeRef.current = null;
+               lastHighlightIndexRef.current = -1;
+               setHighlightIndex(-1);
+            }
           }
         } catch (err) {
             addDebug(`Parse error: ${err}`);
@@ -245,15 +364,22 @@ export default function StoryBook() {
       };
 
       ws.onerror = (e) => {
+        if (attemptId !== connectAttemptRef.current) return;
+        connectingRef.current = false;
         addDebug(`WebSocket error: ${JSON.stringify(e)}`);
         setConnectionStatus('error');
         setConnectionMessage('WebSocket error. Check server logs.');
       };
 
       ws.onclose = (e) => {
+        if (attemptId !== connectAttemptRef.current) return;
+        connectingRef.current = false;
         addDebug(`WebSocket closed: code=${e.code} reason=${e.reason}`);
         setIsConnected(false);
         stopPlayback();
+        if (!shouldReconnectRef.current) {
+          return;
+        }
 
         if (retryCount < 3) {
           const backoffMs = Math.min(1000 * Math.pow(2, retryCount), 8000);
@@ -271,11 +397,15 @@ export default function StoryBook() {
       };
     };
 
-    connect();
+    retryTimer = setTimeout(() => {
+      connect();
+    }, 300);
 
     return () => {
       if (retryTimer) clearTimeout(retryTimer);
-      if (wsRef.current) wsRef.current.close();
+      shouldReconnectRef.current = false;
+      clearHighlightTimer();
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) wsRef.current.close();
       stopPlayback();
       stopRecording();
     };
@@ -288,6 +418,9 @@ export default function StoryBook() {
     }
     if (audioContextRef.current.state === 'suspended') {
        await audioContextRef.current.resume();
+    }
+    if (playbackStartTimeRef.current === null) {
+       playbackStartTimeRef.current = audioContextRef.current.currentTime;
     }
     const binaryString = window.atob(base64Audio);
     const bytes = new Uint8Array(binaryString.length);
@@ -423,6 +556,11 @@ export default function StoryBook() {
                 <p className="text-xl font-bold">Waiting for the magic picture to appear...</p>
              </div>
            )}
+           {illustration && illustrationFallback && (
+             <div className="absolute top-4 left-4 bg-brand-yellow text-brand-purple font-bold text-sm px-3 py-1 rounded-full shadow">
+               Using webcam photo
+             </div>
+           )}
         </div>
 
         {/* Text Area */}
@@ -431,9 +569,28 @@ export default function StoryBook() {
            <div className="card-playful book-page flex flex-col flex-1">
               <h2 className="text-xl font-bold text-brand-blue mb-2">💬 What I am saying</h2>
               <div className="overflow-y-auto">
-                 <p className="text-xl font-semibold text-gray-700 leading-relaxed">
-                    {narrationText || "Waiting for narration..."}
-                 </p>
+                 {narrationText ? (
+                   <p className="text-xl font-semibold text-gray-700 leading-relaxed">
+                     {splitSentences(narrationText).map((sentence, idx, arr) => {
+                       const isCurrent = idx === highlightIndex;
+                        return (
+                          <span
+                            key={`${idx}-${sentence.slice(0, 8)}`}
+                            className={
+                              highlightEnabled && isCurrent
+                                ? 'bg-brand-yellow/30 rounded px-1'
+                                : ''
+                            }
+                          >
+                            {sentence}
+                            {idx < arr.length - 1 ? ' ' : ''}
+                          </span>
+                        );
+                      })}
+                   </p>
+                 ) : (
+                   <p className="text-xl font-semibold text-gray-700 leading-relaxed">Waiting for narration...</p>
+                 )}
                  <div ref={narrationEndRef} className="h-4" />
               </div>
            </div>
@@ -474,7 +631,17 @@ export default function StoryBook() {
         </div>
       </div>
 
-      <div className="fixed inset-x-0 bottom-6 flex items-center justify-center pointer-events-none">
+      <div className="fixed inset-x-0 bottom-6 flex items-center justify-center gap-4 pointer-events-none">
+        <motion.button
+           whileHover={{ scale: 1.05 }}
+           whileTap={{ scale: 0.95 }}
+           onClick={() => {}}
+           className="pointer-events-auto p-4 rounded-full bg-gray-200 text-gray-600 hover:bg-gray-300 transition-colors"
+           title="Image generation toggle (coming soon)"
+        >
+           <ImageIcon className="w-6 h-6" />
+        </motion.button>
+
         <motion.button
            whileHover={{ scale: 1.1 }}
            whileTap={{ scale: 0.9 }}
@@ -482,6 +649,16 @@ export default function StoryBook() {
            className={`pointer-events-auto p-8 rounded-full shadow-lg ${isRecording ? 'bg-brand-pink animate-pulse' : 'bg-brand-blue'} text-white transition-colors`}
         >
            {isRecording ? <MicOff className="w-12 h-12" /> : <Mic className="w-12 h-12" />}
+        </motion.button>
+
+        <motion.button
+           whileHover={{ scale: 1.05 }}
+           whileTap={{ scale: 0.95 }}
+           onClick={() => setHighlightEnabled((prev) => !prev)}
+           className={`pointer-events-auto p-4 rounded-full ${highlightEnabled ? 'bg-brand-yellow text-brand-purple' : 'bg-gray-200 text-gray-600'} hover:bg-gray-300 transition-colors`}
+           title="Toggle narration highlight"
+        >
+           <Sparkles className="w-6 h-6" />
         </motion.button>
       </div>
 
@@ -498,5 +675,13 @@ export default function StoryBook() {
         </motion.button>
       </div>
     </main>
+  );
+}
+
+export default function StoryBook() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center text-2xl font-bold text-brand-purple">Opening the book...</div>}>
+      <StoryBookContent />
+    </Suspense>
   );
 }
