@@ -94,7 +94,7 @@ terraform apply -var-file=dev.tfvars
 
 ## Tear down when done testing in GCP dev environment 
 1. Run `terraform destroy -var-file=dev.tfvars` to delete the Cloud Run service and stop incurring idle costs.
-2. Delete Firestore database: `gcloud firestore databases delete --database='(default)' --project=[PROJECT_ID]`
+2. If needed, delete Firestore database: `gcloud firestore databases delete --database='(default)' --project=[PROJECT_ID]`
 (e.g. `gcloud firestore databases delete --database='(default)' --project=gen-lang-client-0572697337)
 
 ## Important Cost Precautions
