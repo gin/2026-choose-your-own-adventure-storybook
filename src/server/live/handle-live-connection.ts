@@ -15,6 +15,26 @@ export async function handleLiveConnection(wsClient: any) {
   const state = new StoryTurnState();
   const illustrations = new IllustrationManager(wsClient, state);
   let session: any = null;
+  let hasLiveSpeakingLine = false;
+  let finalizedLiveSpeakingLine = false;
+
+  function appendSpeakingChunk(chunk: string) {
+    const singleLineChunk = chunk.replace(/[\r\n]+/g, ' ');
+    if (!singleLineChunk) return;
+    if (!hasLiveSpeakingLine) {
+      process.stdout.write('[Speaking] "');
+      hasLiveSpeakingLine = true;
+      finalizedLiveSpeakingLine = false;
+    }
+    process.stdout.write(singleLineChunk);
+  }
+
+  function finalizeSpeakingLineIfNeeded() {
+    if (hasLiveSpeakingLine && !finalizedLiveSpeakingLine) {
+      process.stdout.write('"\n');
+      finalizedLiveSpeakingLine = true;
+    }
+  }
 
   wsClient.on('message', (message: any) => {
     try {
@@ -106,7 +126,7 @@ export async function handleLiveConnection(wsClient: any) {
             if (serverMsg.serverContent?.outputTranscription?.text) {
               const chunk = serverMsg.serverContent.outputTranscription.text;
               state.appendTranscription(chunk);
-              console.log(`[Speaking] "${chunk}"`);
+              appendSpeakingChunk(chunk);
             }
 
             if (serverMsg.serverContent?.inputTranscription?.text) {
@@ -121,21 +141,27 @@ export async function handleLiveConnection(wsClient: any) {
             if (state.modelTextBuffer.toLowerCase().includes('<speaking')) {
               const extracted = extractTaggedBlocks(state.modelTextBuffer, 'speaking');
               state.setModelTextBuffer(extracted.buffer);
-              for (const line of extracted.results) {
-                if (!line) continue;
-                console.log(`[Speaking] "${line}"`);
-              }
             }
 
             if (serverMsg.setupComplete) {
               console.log('Gemini session setup complete');
             }
 
-            if (serverMsg.serverContent?.turnComplete || serverMsg.serverContent?.interrupted) {
+            const isGenerationComplete = !!serverMsg.serverContent?.generationComplete;
+            if (isGenerationComplete) {
+              finalizeSpeakingLineIfNeeded();
+            }
+
+            const isTurnComplete = !!serverMsg.serverContent?.turnComplete;
+            const isInterrupted = !!serverMsg.serverContent?.interrupted;
+            if (isTurnComplete || isInterrupted) {
+              finalizeSpeakingLineIfNeeded();
               console.log('--- Turn Complete / Interrupted - Clearing Buffers ---');
               state.finalizeCompletedNarration();
               illustrations.maybeGenerateChoiceImage();
               state.resetTurn();
+              hasLiveSpeakingLine = false;
+              finalizedLiveSpeakingLine = false;
             }
           } catch (err) {
             console.error('Error processing server message:', err);

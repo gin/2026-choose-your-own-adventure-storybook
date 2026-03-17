@@ -41,7 +41,8 @@ function extractInlineImage(response: any) {
 
 async function requestIllustration(ai: GoogleGenAI, prompt: string, args: any) {
     return ai.models.generateContent({
-        model: 'gemini-2.5-flash-image',
+        // model: 'gemini-2.5-flash-image',
+        model: '',
         contents: buildContents(prompt, args.referenceImageUrl, args.heroImageUrl),
         config: {
             responseModalities: ['text', 'image'],

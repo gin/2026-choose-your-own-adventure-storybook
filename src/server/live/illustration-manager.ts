@@ -31,6 +31,10 @@ export class IllustrationManager {
 
   triggerStoryStartImage(promptOverride?: string, referenceImageUrl?: string) {
     if (this.state.storyImageGenerated) return;
+    if (!this.state.canGenerateMoreImages()) {
+      console.warn('>>> BUDGET EXCEEDED: Skipping story start image');
+      return;
+    }
 
     this.state.markStoryStartImageTriggered();
     const prompt =
@@ -42,32 +46,18 @@ export class IllustrationManager {
   }
 
   processImageTags(bufferName: 'modelTextBuffer' | 'transcriptionBuffer') {
-    const sourceBuffer =
-      bufferName === 'modelTextBuffer' ? this.state.modelTextBuffer : this.state.transcriptionBuffer;
-    if (!sourceBuffer.toLowerCase().includes('<image')) return;
-
-    const extracted = extractTaggedBlocks(sourceBuffer, 'image');
-    if (bufferName === 'modelTextBuffer') {
-      this.state.setModelTextBuffer(extracted.buffer);
-    } else {
-      this.state.setTranscriptionBuffer(extracted.buffer);
-    }
-
-    for (const promptRaw of extracted.results) {
-      const prompt = promptRaw.replace(/^["']+|["']+$/g, '').trim();
-      if (!prompt || this.state.hasSeenImagePrompt(prompt)) continue;
-
-      this.state.noteImagePrompt(prompt);
-      console.log(`[Image] "${prompt}"`);
-      console.log(`>>> DETECTED IMAGE TAG (${bufferName}): ${prompt}`);
-      console.log(`>>> ATTEMPTING IMAGE GENERATION: ${prompt}`);
-      this.generateAndSend(prompt, this.state.heroImageUrl, false);
-    }
+    // Disabled as per cost-saving plan: Only generate images on user choice.
+    return;
   }
 
   maybeGenerateChoiceImage() {
     const completedTurnText = this.state.getCompletedTurnText();
     if (!this.state.shouldGenerateChoiceImage() || !completedTurnText) return;
+
+    if (!this.state.canGenerateMoreImages()) {
+      console.warn('>>> BUDGET EXCEEDED: Skipping choice image');
+      return;
+    }
 
     const userChoiceText = this.state.getUserChoiceText();
     const prompt = userChoiceText

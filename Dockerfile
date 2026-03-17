@@ -1,6 +1,5 @@
 # 1. Install dependencies
 FROM node:25-alpine AS deps
-RUN apk add --no-cache libc6-compat
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
@@ -32,9 +31,11 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/server.ts ./
 COPY --from=builder --chown=nextjs:nodejs /app/src ./src
 COPY --from=builder --chown=nextjs:nodejs /app/package.json ./
+COPY --from=builder --chown=nextjs:nodejs /app/tsconfig.json ./
 
-# Install tsx globally in the final stage to run server.ts
+# Install runtime dependencies for the custom server
 RUN npm install -g tsx
+RUN npm install ws @next/env
 
 USER nextjs
 
@@ -42,4 +43,4 @@ EXPOSE 3000
 ENV PORT=3000
 
 # Use the custom server
-CMD ["tsx", "server.ts"]
+CMD ["npx", "tsx", "server.ts"]

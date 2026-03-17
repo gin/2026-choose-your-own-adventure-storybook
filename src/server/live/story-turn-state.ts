@@ -9,6 +9,12 @@ export class StoryTurnState {
   imageTagsSeenThisTurn = new Set<string>();
   imageDeliveredThisTurn = false;
   choiceTurnCount = 0;
+  totalImagesGenerated = 0;
+  readonly MAX_IMAGES_PER_SESSION = 15;
+
+  canGenerateMoreImages() {
+    return this.totalImagesGenerated < this.MAX_IMAGES_PER_SESSION;
+  }
 
   appendModelText(text: string) {
     this.modelTextBuffer += text;
@@ -46,6 +52,7 @@ export class StoryTurnState {
 
   markStoryStartImageTriggered() {
     this.storyImageGenerated = true;
+    this.totalImagesGenerated += 1;
   }
 
   noteImagePrompt(prompt: string) {
@@ -66,6 +73,7 @@ export class StoryTurnState {
 
   noteChoiceImageGenerated() {
     this.choiceTurnCount += 1;
+    this.totalImagesGenerated += 1;
   }
 
   markImageDelivered() {
