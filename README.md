@@ -55,7 +55,7 @@ Reading to a child is a magical experience, but static books can't always keep u
 ## Note
 For image generation, you need to link your Google Cloud project to a billing account.
 The current model is set to `gemini-2.5-flash-image` (aka Nano Banana) to keep costs low.
-Set to `imagen-4.0-fast-generate-001` or `gemini-3-pro-image-preview` in `tools/generate_illustrations.ts` for better quality (but higher cost).
+Set the `GEMINI_IMAGE_GENERATION_MODEL` variable in your `.env` file to either `imagen-4.0-fast-generate-001` or `gemini-3-pro-image-preview` for better quality (but higher cost).
 
 ## Testing Locally
 To run and test the storybook locally before deploying:

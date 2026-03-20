@@ -42,7 +42,7 @@ function extractInlineImage(response: any) {
 async function requestIllustration(ai: GoogleGenAI, prompt: string, args: any) {
     return ai.models.generateContent({
         // model: 'gemini-2.5-flash-image',
-        model: '',
+        model: process.env.GEMINI_IMAGE_GENERATION_MODEL || 'gemini-2.5-flash-image', // NOTE: Gemini 2.5 could be deprecated in the future.
         contents: buildContents(prompt, args.referenceImageUrl, args.heroImageUrl),
         config: {
             responseModalities: ['text', 'image'],
@@ -59,10 +59,6 @@ export async function generateIllustration(args: any) {
 
     try {
         const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-        // Vertex AI / Google GenAI SDK call for Imagen 3
-        // In this MVP, we assume the user's reference photo is stored in the session or passed in.
-        // For simplicity we will just call Imagen 3 to generate a standard image first.
-        // We will refine with Subject Reference (imagen-3.0-capability-001) later.
 
         console.log(`Generating illustration for: ${args.prompt}`);
 

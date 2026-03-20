@@ -100,12 +100,12 @@ export async function handleLiveConnection(wsClient: any) {
   wsClient.on('close', () => {
     try {
       if (session) session.close();
-    } catch (e) {}
+    } catch (e) { }
   });
 
   try {
     session = await getAI().live.connect({
-      model: 'gemini-2.5-flash-native-audio-preview-12-2025',
+      model: process.env.GEMINI_MULTIMODAL_LIVE_MODEL || 'gemini-2.5-flash-native-audio-preview-12-2025', // NOTE: Gemini 2.5 could be deprecated in the future.
       config: {
         responseModalities: [Modality.AUDIO],
         inputAudioTranscription: {},
@@ -190,13 +190,13 @@ export async function handleLiveConnection(wsClient: any) {
                 data: { message: e?.message || 'Gemini Live API error' },
               }),
             );
-          } catch {}
+          } catch { }
         },
         onclose: (e: any) => {
           console.log('Gemini closed the connection:', e?.reason || 'no reason');
           try {
             wsClient.close();
-          } catch (err) {}
+          } catch (err) { }
         },
       },
     });
@@ -220,7 +220,7 @@ export async function handleLiveConnection(wsClient: any) {
           data: { message: error?.message || 'Failed to connect to Gemini Live API' },
         }),
       );
-    } catch {}
+    } catch { }
     wsClient.close();
   }
 }
