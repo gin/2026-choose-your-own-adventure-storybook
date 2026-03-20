@@ -560,6 +560,11 @@ function StoryBookContent() {
   };
 
   const startRecording = async () => {
+    if (!isConnected || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      addDebug('Cannot start recording: live connection is not ready yet.');
+      return;
+    }
+
     try {
       // Use a separate AudioContext for recording at 16kHz (playback uses 24kHz)
       if (!recordingContextRef.current) {
@@ -767,7 +772,8 @@ function StoryBookContent() {
            whileHover={{ scale: 1.1 }}
            whileTap={{ scale: 0.9 }}
            onClick={isRecording ? stopRecording : startRecording}
-           className={`pointer-events-auto p-8 rounded-full shadow-lg ${isRecording ? 'bg-brand-pink animate-pulse' : 'bg-brand-blue'} text-white transition-colors`}
+           disabled={!isRecording && !isConnected}
+           className={`pointer-events-auto p-8 rounded-full shadow-lg ${isRecording ? 'bg-brand-pink animate-pulse' : 'bg-brand-blue'} text-white transition-colors ${!isRecording && !isConnected ? 'opacity-50 cursor-not-allowed' : ''}`}
         >
            {isRecording ? <MicOff className="w-12 h-12" /> : <Mic className="w-12 h-12" />}
         </motion.button>

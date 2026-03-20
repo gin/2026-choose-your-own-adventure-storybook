@@ -9,6 +9,20 @@ Reading to a child is a magical experience, but static books can't always keep u
 *   **Dynamic Illustrations**: As the story unfolds, the app uses Vertex AI (Nano Banana or Imagen 4) to generate beautiful, child-friendly illustrations of the specific scenes being narrated.
 *   **Personalization**: The system can take a reference photo and ensure the "hero" of the generated illustrations consistently looks like the child, making them the true star of the adventure.
 
+## Screenshots
+
+| 1. Choose your Narrator | 2. Become the Hero! |
+| :---: | :---: |
+| ![Start Screen](screenshots/02.jpg) | ![Capture Screen](screenshots/03.jpg) |
+
+| 3. Live Storytelling | 4. Debugging Tools |
+| :---: | :---: |
+| ![Story Screen](screenshots/04.jpg) | ![Debug Screen](screenshots/05.jpg) |
+
+| 5. Cost Monitoring (Gemini API) |
+| :---: |
+| ![Gemini API Spend](screenshots/cost.jpg) |
+
 ## Accomplishments
 *   **Zero-Latency Feel**: Creating a custom server architecture that lets the narrator start speaking almost instantly when the app loads.
 *   **Visual Consistency**: Successfully using reference images with Imagen 3 to keep the protagonist’s appearance consistent across different generated scenes.
@@ -98,6 +112,7 @@ terraform apply -var-file=dev.tfvars
 (e.g. `gcloud firestore databases delete --database='(default)' --project=gen-lang-client-0572697337)
 
 ## Important Cost Precautions
+
 When running generative AI models and cloud infrastructure, it is incredibly important to protect yourself against accidental charges.
 
 1. **Set up a Billing Alert:** Go to the [Google Cloud Billing Console](https://console.cloud.google.com/billing) and create a Budget Alert (e.g., alert me at $1.00, $5.00, and $10.00). This won't hard-stop your app, but it will email you immediately if costs spike.

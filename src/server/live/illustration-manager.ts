@@ -20,7 +20,7 @@ export class IllustrationManager {
 
   buildScenePrompt(sceneText: string) {
     const trimmed = sceneText.replace(/\s+/g, ' ').trim().slice(0, 800);
-    return `Create a warm, colorful storybook illustration of this scene. Keep it child-friendly and focus on the main action. Scene: ${trimmed}`;
+    return `Create a warm, colorful storybook illustration of this scene. Use the provided reference photo as the child hero and keep the same identity (face, hair, and overall appearance). Keep it child-friendly and focus on the main action. Scene: ${trimmed}`;
   }
 
   buildChoiceScenePrompt(choiceText: string, sceneText: string) {
@@ -81,7 +81,10 @@ export class IllustrationManager {
             }),
           );
         } else {
-          console.error('>>> IMAGE GENERATION FAILED:', result.error);
+          console.error('>>> IMAGE GENERATION FAILED:', {
+            error: result.error || 'Image generation failed',
+            prompt,
+          });
           if (notifyOnError) {
             try {
               this.wsClient.send(
@@ -94,6 +97,11 @@ export class IllustrationManager {
           }
         }
       })
-      .catch((err) => console.error('>>> TRIGGER ERROR:', err));
+      .catch((err) =>
+        console.error('>>> TRIGGER ERROR:', {
+          error: err?.message || String(err),
+          prompt,
+        }),
+      );
   }
 }

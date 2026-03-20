@@ -121,6 +121,22 @@ resource "google_cloud_run_v2_service" "storybook_app" {
     containers {
       image = "us-central1-docker.pkg.dev/${var.project_id}/storybook-repo/app:latest"
       
+      resources {
+        limits = {
+          cpu = "1000m"
+          memory = "1024Mi"
+        }
+      }
+
+      startup_probe {
+        timeout_seconds = 240
+        period_seconds = 240
+        failure_threshold = 1
+        tcp_socket {
+           port = 3000
+        }
+      }
+
       ports {
         container_port = 3000
       }

@@ -17,6 +17,8 @@ export async function handleLiveConnection(wsClient: any) {
   let session: any = null;
   let hasLiveSpeakingLine = false;
   let finalizedLiveSpeakingLine = false;
+  const pendingClientMessages: any[] = [];
+  const MAX_PENDING_CLIENT_MESSAGES = 400;
 
   function appendSpeakingChunk(chunk: string) {
     const singleLineChunk = chunk.replace(/[\r\n]+/g, ' ');
@@ -36,47 +38,59 @@ export async function handleLiveConnection(wsClient: any) {
     }
   }
 
+  function handleClientMessage(msg: any) {
+    if (!session) return false;
+
+    if (msg.type === 'audio') {
+      session.sendRealtimeInput({
+        audio: {
+          data: msg.data,
+          mimeType: 'audio/pcm;rate=16000',
+        },
+      });
+    }
+
+    if (msg.type === 'audio_end') {
+      try {
+        session.sendRealtimeInput({ endOfTurn: true });
+      } catch (err) {
+        console.error('Error ending audio turn:', err);
+      }
+      state.noteUserTurnEnded();
+    }
+
+    if (msg.type === 'text') {
+      session.sendClientContent({
+        turns: [{ role: 'user', parts: [{ text: msg.text }] }],
+        turnComplete: true,
+      });
+      if (!state.storyImageGenerated) {
+        illustrations.triggerStoryStartImage();
+      }
+      state.noteUserTurnEnded();
+    }
+
+    if (msg.type === 'story_start') {
+      state.setHeroImageUrl(msg.referenceImageUrl);
+      illustrations.triggerStoryStartImage(msg.prompt, msg.referenceImageUrl);
+    }
+
+    if (msg.type === 'session_context') {
+      state.setHeroImageUrl(msg.referenceImageUrl);
+    }
+
+    return true;
+  }
+
   wsClient.on('message', (message: any) => {
     try {
       const msg = JSON.parse(message.toString());
-      if (!session) return;
-
-      if (msg.type === 'audio') {
-        session.sendRealtimeInput({
-          audio: {
-            data: msg.data,
-            mimeType: 'audio/pcm;rate=16000',
-          },
-        });
-      }
-
-      if (msg.type === 'audio_end') {
-        try {
-          session.sendRealtimeInput({ endOfTurn: true });
-        } catch (err) {
-          console.error('Error ending audio turn:', err);
+      const handled = handleClientMessage(msg);
+      if (!handled) {
+        if (pendingClientMessages.length >= MAX_PENDING_CLIENT_MESSAGES) {
+          pendingClientMessages.shift();
         }
-        state.noteUserTurnEnded();
-      }
-
-      if (msg.type === 'text') {
-        session.sendClientContent({
-          turns: [{ role: 'user', parts: [{ text: msg.text }] }],
-          turnComplete: true,
-        });
-        if (!state.storyImageGenerated) {
-          illustrations.triggerStoryStartImage();
-        }
-        state.noteUserTurnEnded();
-      }
-
-      if (msg.type === 'story_start') {
-        state.setHeroImageUrl(msg.referenceImageUrl);
-        illustrations.triggerStoryStartImage(msg.prompt, msg.referenceImageUrl);
-      }
-
-      if (msg.type === 'session_context') {
-        state.setHeroImageUrl(msg.referenceImageUrl);
+        pendingClientMessages.push(msg);
       }
     } catch (err) {
       console.error('Error handling client message:', err);
@@ -186,6 +200,14 @@ export async function handleLiveConnection(wsClient: any) {
         },
       },
     });
+
+    if (pendingClientMessages.length) {
+      console.log(`Flushing ${pendingClientMessages.length} queued client message(s) after Gemini connect`);
+      const queued = pendingClientMessages.splice(0, pendingClientMessages.length);
+      for (const msg of queued) {
+        handleClientMessage(msg);
+      }
+    }
 
     console.log('Gemini Live API connected successfully');
     wsClient.send(JSON.stringify({ type: 'connected' }));
